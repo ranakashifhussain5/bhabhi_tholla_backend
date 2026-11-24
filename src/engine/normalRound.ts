@@ -31,7 +31,9 @@ export function applyNormalRoundMove(
   const isThulla = !isLeader && card.suit !== ledSuit;
 
   const plays = [...round.plays, { seat, card }];
-  const events: GameEvent[] = [{ type: 'card-played', seat, card }];
+  const events: GameEvent[] = [
+    { type: 'card-played', seat, card, ledSuit: isLeader ? null : ledSuit, thulla: isThulla },
+  ];
 
   if (isThulla) {
     const ledSuitPlays = plays.filter((p) => p.card.suit === ledSuit);

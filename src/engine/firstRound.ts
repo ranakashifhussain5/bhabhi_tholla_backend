@@ -32,7 +32,7 @@ export function applyFirstRoundMove(
   player.hand = player.hand.filter((c) => !(c.suit === card.suit && c.rank === card.rank));
 
   const plays = [...round.plays, { seat, card }];
-  const events: GameEvent[] = [{ type: 'card-played', seat, card }];
+  const events: GameEvent[] = [{ type: 'card-played', seat, card, ledSuit: null, thulla: false }];
 
   if (plays.length < round.turnOrder.length) {
     const nextState: GameState = {

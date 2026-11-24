@@ -51,7 +51,9 @@ describe('applyFirstRoundMove', () => {
     expect(result.state.round?.phase).toBe('first-round');
     expect(result.state.round?.nextToActIndex).toBe(1);
     expect(result.state.players[0]!.hand).toEqual([card('S', 2)]);
-    expect(result.events).toEqual([{ type: 'card-played', seat: 0, card: card('S', 14) }]);
+    expect(result.events).toEqual([
+      { type: 'card-played', seat: 0, card: card('S', 14), ledSuit: null, thulla: false },
+    ]);
   });
 
   it('resolves to the highest spade starting round two once everyone has played', () => {
@@ -90,7 +92,7 @@ describe('applyFirstRoundMove', () => {
       [card('C', 4)],
     ]);
     expect(lastEvents).toEqual([
-      { type: 'card-played', seat: 3, card: card('S', 13) },
+      { type: 'card-played', seat: 3, card: card('S', 13), ledSuit: null, thulla: false },
       {
         type: 'round-discarded',
         cards: [card('S', 14), card('S', 5), card('H', 2), card('S', 13)],

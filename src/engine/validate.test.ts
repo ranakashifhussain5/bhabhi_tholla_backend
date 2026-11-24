@@ -58,7 +58,9 @@ describe('applyMove', () => {
     const state = baseState();
     const result = applyMove(state, 0, card('S', 14));
     expect(result.state.players[0]!.hand).toEqual([card('H', 5)]);
-    expect(result.events).toEqual([{ type: 'card-played', seat: 0, card: card('S', 14) }]);
+    expect(result.events).toEqual([
+      { type: 'card-played', seat: 0, card: card('S', 14), ledSuit: null, thulla: false },
+    ]);
   });
 
   it('rejects any move once the game is over', () => {

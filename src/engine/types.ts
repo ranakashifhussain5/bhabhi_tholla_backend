@@ -54,7 +54,7 @@ export interface GameState {
 }
 
 export type GameEvent =
-  | { type: 'card-played'; seat: number; card: Card }
+  | { type: 'card-played'; seat: number; card: Card; ledSuit: Suit | null; thulla: boolean }
   | { type: 'round-discarded'; cards: Card[]; nextStarter: number }
   | { type: 'round-picked-up'; seat: number; cards: Card[]; nextStarter: number }
   | { type: 'player-escaped'; seat: number; position: number }

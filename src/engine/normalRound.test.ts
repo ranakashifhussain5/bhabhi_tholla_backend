@@ -53,7 +53,9 @@ describe('applyNormalRoundMove', () => {
       plays: [{ seat: 0, card: card('H', 4) }],
     });
     expect(result.state.players[0]!.hand).toEqual([card('C', 2)]);
-    expect(result.events).toEqual([{ type: 'card-played', seat: 0, card: card('H', 4) }]);
+    expect(result.events).toEqual([
+      { type: 'card-played', seat: 0, card: card('H', 4), ledSuit: null, thulla: false },
+    ]);
   });
 
   it('discards and starts the next round with the highest card when nobody thullas', () => {
@@ -100,6 +102,13 @@ describe('applyNormalRoundMove', () => {
     state = result.state;
 
     expect(result.events.map((e) => e.type)).toEqual(['card-played', 'round-picked-up', 'player-escaped']);
+    expect(result.events).toContainEqual({
+      type: 'card-played',
+      seat: 2,
+      card: card('D', 7),
+      ledSuit: 'H',
+      thulla: true,
+    });
     expect(result.events).toContainEqual({
       type: 'round-picked-up',
       seat: 0,
