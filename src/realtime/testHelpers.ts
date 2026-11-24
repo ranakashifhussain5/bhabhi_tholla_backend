@@ -28,5 +28,7 @@ export function makeTestRoom(options: {
     seats,
     state: makeGame({ hands: options.hands, round: options.round }),
     knowledge: createKnowledge(playerCount),
+    startedAt: new Date(),
+    resultPersisted: false,
   };
 }

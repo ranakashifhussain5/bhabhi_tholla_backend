@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { Server as HTTPServer } from 'node:http';
 import { Server as SocketIOServer, type DefaultEventsMap, type Socket } from 'socket.io';
+import type { JwtSecrets } from '../auth/index.js';
+import { verifyToken } from '../auth/index.js';
+import { persistGameResult } from '../db/results.js';
 import type { Card } from '../engine/index.js';
+import type { PrismaClient } from '../generated/prisma/client.js';
 import { advance, applyHumanMove, handleDisconnect, handleQuit, reclaimSeat } from './gameplay.js';
 import { QuickPlayMatchmaker } from './matchmaking.js';
 import type { SeatEntry } from './matchmaking.js';
@@ -21,7 +25,7 @@ import { TurnTimerManager } from './turnTimer.js';
 
 interface SocketData {
   roomId?: string;
-  playerId?: string;
+  playerId: string;
 }
 
 export interface RealtimeServer {
@@ -29,16 +33,21 @@ export interface RealtimeServer {
   repository: RoomRepository;
 }
 
+export interface AttachSocketServerOptions {
+  turnTimeoutMs?: number;
+  prisma: PrismaClient;
+  jwtSecrets: JwtSecrets;
+}
+
 /**
  * Wires the room/gameplay/matchmaking primitives (already unit-tested on
- * their own) to real Socket.IO events. Identity here is just a client-
- * supplied playerId string - there is no auth yet (that is Phase 4), so this
- * layer trusts it. Phase 6 (hardening) needs to replace that trust with a
- * real verified identity before this ships.
+ * their own) to real Socket.IO events. Every connection must present a valid
+ * access token (section 12's "server is authoritative" extends to identity
+ * too) - there is no more trust-the-client-string gap from Phase 3.
  */
 export function attachSocketServer(
   httpServer: HTTPServer,
-  options: { turnTimeoutMs?: number } = {},
+  options: AttachSocketServerOptions,
 ): RealtimeServer {
   const io = new SocketIOServer<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>(httpServer, {
     cors: { origin: '*' },
@@ -47,11 +56,30 @@ export function attachSocketServer(
   const timers = new TurnTimerManager(
     options.turnTimeoutMs === undefined ? {} : { timeoutMs: options.turnTimeoutMs },
   );
+  const { prisma, jwtSecrets } = options;
+
+  io.use((socket, next) => {
+    void (async () => {
+      try {
+        const token = socket.handshake.auth.token as unknown;
+        if (typeof token !== 'string') throw new Error('missing-token');
+        socket.data.playerId = await verifyToken(token, jwtSecrets.accessSecret);
+        next();
+      } catch {
+        next(new Error('unauthorized'));
+      }
+    })();
+  });
 
   function notify(room: Room): void {
     for (const seat of room.seats) {
       if (seat.isBot || seat.socketId === null) continue;
       io.to(seat.socketId).emit('room:state', buildPlayerView(room, seat.seat));
+    }
+    if (room.state?.gameOver) {
+      void persistGameResult(prisma, room).catch((err: unknown) => {
+        console.error(`Failed to persist game result for room ${room.roomId}`, err);
+      });
     }
   }
 
@@ -99,17 +127,15 @@ export function attachSocketServer(
   }
 
   io.on('connection', (socket: Socket<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>) => {
-    socket.on('quickplay:join', (payload: { playerId: string }) => {
-      socket.data.playerId = payload.playerId;
-      matchmaker.join(payload.playerId, socket.id);
+    socket.on('quickplay:join', () => {
+      matchmaker.join(socket.data.playerId, socket.id);
     });
 
     socket.on(
       'privateroom:create',
-      (payload: { playerId: string }, ack?: (res: { roomId: string; roomCode: string; joinLink: string }) => void) => {
-        const room = createPrivateRoom(repository, payload.playerId);
+      (_payload: unknown, ack?: (res: { roomId: string; roomCode: string; joinLink: string }) => void) => {
+        const room = createPrivateRoom(repository, socket.data.playerId);
         socket.data.roomId = room.roomId;
-        socket.data.playerId = payload.playerId;
         void socket.join(room.roomId);
         ack?.({
           roomId: room.roomId,
@@ -121,16 +147,15 @@ export function attachSocketServer(
 
     socket.on(
       'privateroom:join',
-      (payload: { roomCode: string; playerId: string }, ack?: (res: { ok: boolean; error?: string }) => void) => {
+      (payload: { roomCode: string }, ack?: (res: { ok: boolean; error?: string }) => void) => {
         const room = repository.findByRoomCode(payload.roomCode);
         if (!room) {
           ack?.({ ok: false, error: 'room-not-found' });
           return;
         }
         try {
-          joinPrivateRoom(room, payload.playerId);
+          joinPrivateRoom(room, socket.data.playerId);
           socket.data.roomId = room.roomId;
-          socket.data.playerId = payload.playerId;
           void socket.join(room.roomId);
           ack?.({ ok: true });
           io.to(room.roomId).emit('privateroom:lobby', { pendingPlayerIds: room.pendingPlayerIds });
@@ -143,7 +168,7 @@ export function attachSocketServer(
     socket.on('privateroom:start', (_payload: unknown, ack?: (res: { ok: boolean; error?: string }) => void) => {
       const room = currentRoom(socket);
       const playerId = socket.data.playerId;
-      if (!room || !playerId) {
+      if (!room) {
         ack?.({ ok: false, error: 'not-in-a-room' });
         return;
       }
@@ -180,24 +205,20 @@ export function attachSocketServer(
       if (room) handleQuit(room, timers, socket.id, notify);
     });
 
-    socket.on(
-      'reclaim',
-      (payload: { roomId: string; playerId: string }, ack?: (res: { ok: boolean }) => void) => {
-        const room = repository.get(payload.roomId);
-        if (!room) {
-          ack?.({ ok: false });
-          return;
-        }
-        const binding = reclaimSeat(room, payload.playerId, socket.id);
-        if (binding) {
-          socket.data.roomId = room.roomId;
-          socket.data.playerId = payload.playerId;
-          void socket.join(room.roomId);
-        }
-        ack?.({ ok: binding !== null });
-        if (binding) notify(room);
-      },
-    );
+    socket.on('reclaim', (payload: { roomId: string }, ack?: (res: { ok: boolean }) => void) => {
+      const room = repository.get(payload.roomId);
+      if (!room) {
+        ack?.({ ok: false });
+        return;
+      }
+      const binding = reclaimSeat(room, socket.data.playerId, socket.id);
+      if (binding) {
+        socket.data.roomId = room.roomId;
+        void socket.join(room.roomId);
+      }
+      ack?.({ ok: binding !== null });
+      if (binding) notify(room);
+    });
 
     socket.on('disconnect', () => {
       const room = currentRoom(socket);

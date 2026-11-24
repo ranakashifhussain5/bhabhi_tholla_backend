@@ -5,7 +5,7 @@ import eslintConfigPrettier from 'eslint-config-prettier';
 import globals from 'globals';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'index.js'] },
+  { ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'index.js', 'src/generated/**'] },
   eslint.configs.recommended,
   { languageOptions: { globals: globals.node } },
   {

@@ -1,8 +1,11 @@
 import { createServer } from 'node:http';
 import type { Server as HTTPServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { io as ioClient, type Socket as ClientSocket } from 'socket.io-client';
+import { createGuestSession } from '../auth/index.js';
+import { prisma } from '../db/client.js';
+import { resetDb } from '../db/testHelpers.js';
 import type { PlayerView } from './projection.js';
 import { attachSocketServer } from './socketServer.js';
 import type { RealtimeServer } from './socketServer.js';
@@ -18,6 +21,19 @@ interface AckResponse {
 }
 
 const TURN_TIMEOUT_MS = 300;
+const jwtSecrets = { accessSecret: 'a'.repeat(32), refreshSecret: 'b'.repeat(32) };
+
+async function waitForParticipants(mode: string, expectedCount: number, attempts = 40) {
+  for (let i = 0; i < attempts; i++) {
+    const game = await prisma.game.findFirst({ where: { mode } });
+    if (game) {
+      const participants = await prisma.gameParticipant.findMany({ where: { gameId: game.id } });
+      if (participants.length >= expectedCount) return participants;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`${expectedCount} game participants for mode "${mode}" were not persisted in time`);
+}
 
 describe('socketServer integration (real socket.io-client)', () => {
   let httpServer: HTTPServer;
@@ -26,8 +42,9 @@ describe('socketServer integration (real socket.io-client)', () => {
   const clients: ClientSocket[] = [];
 
   beforeEach(async () => {
+    await resetDb();
     httpServer = createServer();
-    realtime = attachSocketServer(httpServer, { turnTimeoutMs: TURN_TIMEOUT_MS });
+    realtime = attachSocketServer(httpServer, { turnTimeoutMs: TURN_TIMEOUT_MS, prisma, jwtSecrets });
     await new Promise<void>((resolve) => {
       httpServer.listen(0, resolve);
     });
@@ -44,8 +61,16 @@ describe('socketServer integration (real socket.io-client)', () => {
     });
   });
 
-  function connect(): ClientSocket {
-    const socket = ioClient(baseUrl, { transports: ['websocket'], forceNew: true });
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  function connect(accessToken: string): ClientSocket {
+    const socket = ioClient(baseUrl, {
+      transports: ['websocket'],
+      forceNew: true,
+      auth: { token: accessToken },
+    });
     clients.push(socket);
     return socket;
   }
@@ -53,19 +78,21 @@ describe('socketServer integration (real socket.io-client)', () => {
   it(
     'plays a full 4-player quick-play game end to end, including a forced timeout and a disconnect/reconnect',
     async () => {
-      const playerIds = ['alice', 'bob', 'carol', 'dave'];
-      const sockets = playerIds.map(() => connect());
+      const guests = await Promise.all(
+        Array.from({ length: 4 }, () => createGuestSession(prisma, jwtSecrets)),
+      );
+      const sockets = guests.map((g) => connect(g.tokens.accessToken));
 
       let roomId = '';
       await Promise.all(
         sockets.map(
-          (socket, i) =>
+          (socket) =>
             new Promise<void>((resolve) => {
               socket.once('room:joined', (payload: JoinedPayload) => {
                 roomId = payload.roomId;
                 resolve();
               });
-              socket.emit('quickplay:join', { playerId: playerIds[i] });
+              socket.emit('quickplay:join');
             }),
         ),
       );
@@ -90,26 +117,22 @@ describe('socketServer integration (real socket.io-client)', () => {
             if (finishIfGameOver(view)) return;
             if (!view.yourTurn || view.legalMoves.length === 0) return;
 
-            // Seat index 1 (bob): skip exactly one turn to force the server's turn timer.
+            // Seat index 1 (the 2nd guest): skip exactly one turn to force the server's turn timer.
             if (index === 1 && timedOutSeat === -1) {
               timedOutSeat = view.viewerSeat;
               return;
             }
 
-            // Seat index 0 (alice): disconnect once mid-game instead of playing, then reclaim her seat.
+            // Seat index 0 (the 1st guest): disconnect once mid-game instead of playing, then reclaim.
             if (index === 0 && !aliceDisconnectedOnce && view.round && view.round.plays.length > 0) {
               aliceDisconnectedOnce = true;
               socket.disconnect();
 
-              const reclaimSocket = connect();
+              const reclaimSocket = connect(guests[0]!.tokens.accessToken);
               wireAutoPlayer(reclaimSocket, index);
-              reclaimSocket.emit(
-                'reclaim',
-                { roomId, playerId: 'alice' },
-                (res: AckResponse) => {
-                  expect(res.ok).toBe(true);
-                },
-              );
+              reclaimSocket.emit('reclaim', { roomId }, (res: AckResponse) => {
+                expect(res.ok).toBe(true);
+              });
               return;
             }
 
@@ -122,6 +145,13 @@ describe('socketServer integration (real socket.io-client)', () => {
 
       expect(timedOutSeat).toBeGreaterThanOrEqual(0);
       expect(aliceDisconnectedOnce).toBe(true);
+
+      // Phase 4 integration: the finished ranked game should have been
+      // persisted. notify() fires the write without awaiting it (so the game
+      // loop never blocks on DB I/O), and the 4 participant rows are written
+      // in a sequential loop, so poll until all 4 have actually landed.
+      const participants = await waitForParticipants('quick-play', 4);
+      expect(participants).toHaveLength(4);
     },
     30_000,
   );

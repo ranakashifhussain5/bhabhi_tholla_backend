@@ -25,6 +25,9 @@ export interface Room {
   seats: SeatBinding[];
   state: GameState | null;
   knowledge: BotKnowledge | null;
+  startedAt: Date | null;
+  /** Set once by db/results.ts after persisting - guards against double-writing a result if notify() fires again post-game-over. */
+  resultPersisted: boolean;
 }
 
 export function createLobbyRoom(options: {
@@ -44,6 +47,8 @@ export function createLobbyRoom(options: {
     seats: [],
     state: null,
     knowledge: null,
+    startedAt: null,
+    resultPersisted: false,
   };
 }
 
@@ -56,6 +61,7 @@ export function startGame(room: Room, playerIds: ReadonlyArray<string | null>): 
   const playerCount = playerIds.length;
   room.state = createGame(playerCount);
   room.knowledge = createKnowledge(playerCount);
+  room.startedAt = new Date();
   room.seats = playerIds.map((playerId, seat) => ({
     seat,
     playerId,

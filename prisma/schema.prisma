@@ -1,0 +1,61 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String?  @unique
+  passwordHash String?
+  rankPoints   Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  participations GameParticipant[]
+  reportsFiled    Report[]          @relation("ReportsFiled")
+  reportsReceived Report[]          @relation("ReportsReceived")
+}
+
+model Game {
+  id          String   @id @default(uuid())
+  mode        String
+  affectsRank Boolean
+  playerCount Int
+  startedAt   DateTime
+  endedAt     DateTime @default(now())
+
+  participants GameParticipant[]
+  reports      Report[]
+}
+
+model GameParticipant {
+  id              String  @id @default(uuid())
+  gameId          String
+  userId          String
+  seat            Int
+  position        Int
+  pointsDelta     Int
+  quitVoluntarily Boolean @default(false)
+
+  game Game @relation(fields: [gameId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([gameId, seat])
+}
+
+model Report {
+  id         String   @id @default(uuid())
+  reporterId String
+  reportedId String
+  gameId     String?
+  message    String
+  createdAt  DateTime @default(now())
+
+  reporter User  @relation("ReportsFiled", fields: [reporterId], references: [id])
+  reported User  @relation("ReportsReceived", fields: [reportedId], references: [id])
+  game     Game? @relation(fields: [gameId], references: [id])
+}
