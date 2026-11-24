@@ -155,5 +155,5 @@ share one real database and reset it between tests.
 | `src/chat/` | Messages, profanity filter, mute, reports |
 | `prisma/` | Schema and migrations |
 
-See `plans/pending/backend-build.md` for the phase-by-phase build plan and
+See `plans/archive/backend-build.md` for the phase-by-phase build plan and
 decision log.

@@ -44,6 +44,23 @@ describe('linkEmailPassword', () => {
     await expect(linkEmailPassword(prisma, guest.userId, 'same@example.com', 'new-password')).resolves.not.toThrow();
   });
 
+  it('cleanly rejects a concurrent race to link the same email to two different accounts', async () => {
+    const first = await createGuestSession(prisma, secrets);
+    const second = await createGuestSession(prisma, secrets);
+
+    // Both calls pass the findUnique check before either one's update
+    // commits - the DB's unique constraint, not the check, is what must
+    // stop the loser, and it must surface as the same clean AuthError.
+    const results = await Promise.allSettled([
+      linkEmailPassword(prisma, first.userId, 'race@example.com', 'password123'),
+      linkEmailPassword(prisma, second.userId, 'race@example.com', 'password123'),
+    ]);
+
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(AuthError);
+  });
+
   it('normalizes email case, so differently-cased emails cannot collide or diverge', async () => {
     const first = await createGuestSession(prisma, secrets);
     const second = await createGuestSession(prisma, secrets);

@@ -1,3 +1,4 @@
+import { Prisma } from '../generated/prisma/client.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { issueTokenPair } from './jwt.js';
 import type { JwtSecrets, TokenPair } from './jwt.js';
@@ -28,7 +29,17 @@ export async function linkEmailPassword(
   }
 
   const passwordHash = await hashPassword(password);
-  await prisma.user.update({ where: { id: userId }, data: { email: normalizedEmail, passwordHash } });
+  try {
+    await prisma.user.update({ where: { id: userId }, data: { email: normalizedEmail, passwordHash } });
+  } catch (err) {
+    // The findUnique check above can't see a concurrent link racing it to
+    // the same email; the DB's unique constraint is the real guard, so
+    // translate its violation into the same clean error as the check.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      throw new AuthError('email-already-in-use');
+    }
+    throw err;
+  }
 }
 
 /** Lets a player who linked email/password on one device get back into the same account from another. */

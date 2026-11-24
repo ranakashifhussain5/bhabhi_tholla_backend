@@ -63,6 +63,27 @@ describe('QuickPlayMatchmaker', () => {
     expect(startRoom).toHaveBeenCalledTimes(1);
   });
 
+  it('ignores a duplicate join from a player already queued (e.g. a double-click)', () => {
+    const startRoom = vi.fn();
+    const matchmaker = new QuickPlayMatchmaker(startRoom, { seatsNeeded: 4, waitMs: 30_000 });
+
+    matchmaker.join('a', 'sa');
+    matchmaker.join('a', 'sa-second-attempt');
+    matchmaker.join('b', 'sb');
+    matchmaker.join('c', 'sc');
+    expect(matchmaker.queueLength()).toBe(3);
+    expect(startRoom).not.toHaveBeenCalled();
+
+    matchmaker.join('d', 'sd');
+
+    expect(startRoom).toHaveBeenCalledWith([
+      { playerId: 'a', socketId: 'sa' },
+      { playerId: 'b', socketId: 'sb' },
+      { playerId: 'c', socketId: 'sc' },
+      { playerId: 'd', socketId: 'sd' },
+    ]);
+  });
+
   it('starts a fresh wait window for the next table after one fills', () => {
     const startRoom = vi.fn();
     const matchmaker = new QuickPlayMatchmaker(startRoom, { seatsNeeded: 2, waitMs: 1000 });

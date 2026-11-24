@@ -198,6 +198,47 @@ describe('socketServer integration (real socket.io-client)', () => {
   );
 
   it(
+    'removes the room from the repository once the game ends, so it is not kept forever in memory',
+    async () => {
+      const pool = new SocketPool();
+      try {
+        const guests = await Promise.all(
+          Array.from({ length: 4 }, () => createGuestSession(prisma, jwtSecrets)),
+        );
+        const sockets = guests.map((g) => pool.connect(server.baseUrl, g.tokens.accessToken));
+
+        let roomId = '';
+        await Promise.all(
+          sockets.map(
+            (socket) =>
+              new Promise<void>((resolve) => {
+                socket.once('room:joined', (payload: JoinedPayload) => {
+                  roomId = payload.roomId;
+                  resolve();
+                });
+                socket.emit('quickplay:join');
+              }),
+          ),
+        );
+        expect(roomId).not.toBe('');
+        expect(server.realtime.repository.get(roomId)).toBeDefined();
+
+        // Disconnecting every real player while still in round 1 converts
+        // all seats to bots (section 7); the server then plays the rest of
+        // the game out instantly via the internal bot loop, exactly like the
+        // chat-mute test below relies on for its own cleanup.
+        pool.closeAll();
+
+        await waitForParticipants('quick-play', 4);
+        expect(server.realtime.repository.get(roomId)).toBeUndefined();
+      } finally {
+        pool.closeAll();
+      }
+    },
+    15_000,
+  );
+
+  it(
     "excludes a muted player's chat messages only from the muter's own stream",
     async () => {
       const pool = new SocketPool();

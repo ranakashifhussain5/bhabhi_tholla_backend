@@ -132,9 +132,14 @@ export function attachSocketServer(
     }
     if (room.state?.gameOver) {
       logger.info(`Game ended for room ${room.roomId} (mode=${room.mode})`);
-      void persistGameResult(prisma, room).catch((err: unknown) => {
-        logger.error(`Failed to persist game result for room ${room.roomId}: ${String(err)}`);
-      });
+      // Nobody can act on this room through the socket layer anymore (every
+      // handler already copes with a missing room) - without this, every
+      // finished game's Room stays in the in-memory repository forever.
+      void persistGameResult(prisma, room)
+        .catch((err: unknown) => {
+          logger.error(`Failed to persist game result for room ${room.roomId}: ${String(err)}`);
+        })
+        .finally(() => repository.delete(room.roomId));
     }
   }
 
@@ -357,9 +362,13 @@ export function attachSocketServer(
         return;
       }
       void (async () => {
-        await unmuteUser(prisma, socket.data.playerId, parsed.mutedPlayerId);
-        socket.data.mutedUserIds = await getMutedUserIds(prisma, socket.data.playerId);
-        ack?.({ ok: true });
+        try {
+          await unmuteUser(prisma, socket.data.playerId, parsed.mutedPlayerId);
+          socket.data.mutedUserIds = await getMutedUserIds(prisma, socket.data.playerId);
+          ack?.({ ok: true });
+        } catch {
+          ack?.({ ok: false });
+        }
       })();
     });
 

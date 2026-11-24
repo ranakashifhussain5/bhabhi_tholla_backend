@@ -47,7 +47,7 @@ export function buildPlayerView(room: Room, viewerSeat: number): PlayerView {
 
   return {
     viewerSeat,
-    hand: viewer.hand,
+    hand: [...viewer.hand],
     seats: state.players.map((player, seat) => ({
       seat,
       cardCount: player.hand.length,
@@ -58,9 +58,9 @@ export function buildPlayerView(room: Room, viewerSeat: number): PlayerView {
     round: state.round
       ? {
           phase: state.round.phase,
-          turnOrder: state.round.turnOrder,
+          turnOrder: [...state.round.turnOrder],
           nextToActIndex: state.round.nextToActIndex,
-          plays: state.round.plays,
+          plays: [...state.round.plays],
         }
       : null,
     finishOrder: state.finishOrder,

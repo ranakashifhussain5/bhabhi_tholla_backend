@@ -28,6 +28,7 @@ export class QuickPlayMatchmaker {
   }
 
   join(playerId: string, socketId: string): void {
+    if (this.queue.some((entry) => entry.playerId === playerId)) return;
     this.queue.push({ playerId, socketId });
 
     if (this.queue.length >= this.seatsNeeded) {
