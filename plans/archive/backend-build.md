@@ -4,6 +4,59 @@ Source of truth for rules: [GAME_RULES.md](../../GAME_RULES.md)
 Goal: a server-authoritative, future-proof backend for the Bhabhi Thulla card game,
 built in clean phases so each layer is solid before the next depends on it.
 
+## Execution record (archived)
+
+All 7 phases shipped, in order, across 12 commits. 167 tests passing at close
+(engine, bots, realtime, auth, db, chat - all with real-integration tests, not
+mocks, including a real Postgres and real socket.io-client throughout).
+
+**What shipped beyond the original plan:**
+- A `legalMoves` field on the player projection (Phase 3) - not in the
+  original plan, needed so a real client (and the integration tests) can
+  know what's playable without duplicating engine rules.
+- A `Mute` Prisma model (Phase 5) - the plan's file list didn't mention one,
+  but "persists across reconnects" only holds if mutes are DB-backed, not
+  in-memory.
+- A `roomId` field on `Report` (Phase 5) plus a backfill step in
+  `persistGameResult` - a live game has no `Game` row yet when a report is
+  filed mid-game.
+- 4 correctness/safety fixes identified in a self-review after Phase 4,
+  fixed at the start of Phase 6: email case-folding, atomic (not
+  read-then-write) rank point updates, transactional `persistGameResult`,
+  and a password length cap.
+- `TurnTimerManager.clearAll()` / `RealtimeServer.shutdown()` - closing
+  io/httpServer never cancelled pending turn timers; found this chasing a
+  genuinely tricky test-isolation bug (see below).
+
+**Real bugs found and fixed along the way** (not just test bugs):
+- A thulla pickup pile was tracked as permanently discarded instead of
+  returned to circulation, starving the bot's opponent-hand sampler (Phase 2).
+- `@fastify/rate-limit`'s `onRequest` hook silently never applied when
+  `app.register()` wasn't awaited before routes were defined, even though
+  `app.ready()` reported success either way (Phase 6) - `buildApp` is now async.
+- Closing a test's sockets while a private room's game was still in round 1
+  correctly triggered real disconnect → bot-takeover → game-completion
+  (section 7, working as designed) - but that completion's DB write raced a
+  later test's db reset. Each socket integration test now owns and closes
+  its own socket pool and explicitly waits for any persistence it triggers.
+
+**Not independently verified:** `docker build` / `docker-compose up` end to
+end - Docker isn't installed on the dev machine. The Dockerfile's core
+assumption (the driver-adapter Prisma client needs no native engine binary
+at runtime) was validated by installing only production dependencies
+locally and running the compiled server against the real database that way,
+which exercises the same code path but not the container build itself.
+
+**Open items for a future session** (deliberately out of scope per the
+Always/Never below, or simply not yet needed):
+- Token revocation / logout - JWTs are stateless, so a stolen refresh token
+  remains valid until its natural 30-day expiry.
+- The identity-provider question (phone+OTP, Google) beyond email/password.
+- Everything in "Not yet specified" below that was never revisited because
+  its phase never needed an answer (bot-filled quick-play points, private
+  room bot-fill, multi-game private rooms) - defaults as stated held up fine.
+- An actual `docker build` test once Docker is available.
+
 ## Decision log
 
 | Decision | Chosen option | Why |
