@@ -213,11 +213,14 @@ Files to touch: `Dockerfile`, `docker-compose.yml`, `src/**` (hardening touch-up
 
 ## Open environment gap
 
-- **Docker is not installed on the dev machine.** `docker-compose.yml` for local Postgres
-  is written (step 0.2) but `docker-compose up` / `db:ping` could not be run to verify it.
-  Phase 4 (Prisma + Postgres) is blocked on this until either Docker Desktop is installed,
-  or we switch local dev to a native Postgres install / a free-tier cloud Postgres (e.g.
-  Neon) instead. Needs a decision before Phase 4 starts.
+- **Resolved**: Docker is still not installed on the dev machine, but PostgreSQL 19 is now
+  installed natively (Windows service `postgresql-x64-19`, listening on port 5432).
+  `.env` (gitignored) points `DATABASE_URL` at it with a `bhabhi_tholla` database already
+  created. `npm run db:ping` was changed from a `docker compose exec` call to a small
+  cross-platform script (`scripts/db-ping.mjs`) that checks reachability via `DATABASE_URL`
+  directly, so it works the same whether Postgres is native or Dockerized — verified
+  working. `docker-compose.yml` is kept as-is for anyone who prefers Docker later (e.g. CI
+  or another dev's machine); it's just not this machine's path. Phase 4 is unblocked.
 
 ## Not yet specified (fog — resolve when that phase is picked up)
 
@@ -231,7 +234,7 @@ Files to touch: `Dockerfile`, `docker-compose.yml`, `src/**` (hardening touch-up
 
 | Phase | Status |
 | --- | --- |
-| 0: Project foundation | Done — git/TS/ESLint/Prettier/Vitest/Fastify all verified green. Docker is not installed on this machine, so `docker-compose up`/`db:ping` (step 0.2) are written but unverified locally — see note below. |
+| 0: Project foundation | Done — git/TS/ESLint/Prettier/Vitest/Fastify all verified green, including a live Postgres connectivity check (see Open environment gap note: native install, not Docker). |
 | 1: Core game engine | Done — deck/deal, first round, normal round, finish/escape/Bhabhi logic, move validator facade. 47 tests passing (unit + a 100-game random-move simulation across 3-6 players, re-run 5x for flakiness, all stable). |
 | 2: Bot AI | Not started |
 | 3: Realtime orchestration | Not started |
