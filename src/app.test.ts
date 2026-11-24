@@ -38,7 +38,7 @@ afterAll(async () => {
 
 describe('GET /health', () => {
   it('returns ok status', async () => {
-    const app = makeApp();
+    const app = await makeApp();
     const response = await app.inject({ method: 'GET', url: '/health' });
 
     expect(response.statusCode).toBe(200);
@@ -48,7 +48,7 @@ describe('GET /health', () => {
 
 describe('POST /auth/guest', () => {
   it('creates a new guest user and returns a token pair', async () => {
-    const app = makeApp();
+    const app = await makeApp();
     const response = await app.inject({ method: 'POST', url: '/auth/guest' });
 
     expect(response.statusCode).toBe(200);
@@ -57,11 +57,23 @@ describe('POST /auth/guest', () => {
     expect(body.tokens.accessToken).toBeTruthy();
     expect(body.tokens.refreshToken).toBeTruthy();
   });
+
+  it('rate-limits repeated guest creation from the same client', async () => {
+    const app = await makeApp();
+
+    for (let i = 0; i < 10; i++) {
+      const response = await app.inject({ method: 'POST', url: '/auth/guest' });
+      expect(response.statusCode).toBe(200);
+    }
+
+    const limited = await app.inject({ method: 'POST', url: '/auth/guest' });
+    expect(limited.statusCode).toBe(429);
+  });
 });
 
 describe('POST /auth/refresh', () => {
   it('rotates a valid refresh token', async () => {
-    const app = makeApp();
+    const app = await makeApp();
     const guest = asGuestSession(await app.inject({ method: 'POST', url: '/auth/guest' }));
 
     const response = await app.inject({
@@ -75,13 +87,13 @@ describe('POST /auth/refresh', () => {
   });
 
   it('rejects a malformed request body', async () => {
-    const app = makeApp();
+    const app = await makeApp();
     const response = await app.inject({ method: 'POST', url: '/auth/refresh', payload: {} });
     expect(response.statusCode).toBe(400);
   });
 
   it('rejects an invalid refresh token', async () => {
-    const app = makeApp();
+    const app = await makeApp();
     const response = await app.inject({
       method: 'POST',
       url: '/auth/refresh',
@@ -93,7 +105,7 @@ describe('POST /auth/refresh', () => {
 
 describe('POST /auth/link and /auth/login', () => {
   it('links email/password to a guest, then logs in with them', async () => {
-    const app = makeApp();
+    const app = await makeApp();
     const guest = asGuestSession(await app.inject({ method: 'POST', url: '/auth/guest' }));
 
     const linkResponse = await app.inject({
@@ -114,7 +126,7 @@ describe('POST /auth/link and /auth/login', () => {
   });
 
   it('rejects a password over the length cap', async () => {
-    const app = makeApp();
+    const app = await makeApp();
     const guest = asGuestSession(await app.inject({ method: 'POST', url: '/auth/guest' }));
 
     const response = await app.inject({
@@ -127,7 +139,7 @@ describe('POST /auth/link and /auth/login', () => {
   });
 
   it('rejects linking without a valid access token', async () => {
-    const app = makeApp();
+    const app = await makeApp();
     const response = await app.inject({
       method: 'POST',
       url: '/auth/link',
@@ -137,7 +149,7 @@ describe('POST /auth/link and /auth/login', () => {
   });
 
   it('rejects linking an email already in use', async () => {
-    const app = makeApp();
+    const app = await makeApp();
     const first = asGuestSession(await app.inject({ method: 'POST', url: '/auth/guest' }));
     const second = asGuestSession(await app.inject({ method: 'POST', url: '/auth/guest' }));
 
@@ -158,7 +170,7 @@ describe('POST /auth/link and /auth/login', () => {
   });
 
   it('rejects login with the wrong password', async () => {
-    const app = makeApp();
+    const app = await makeApp();
     const guest = asGuestSession(await app.inject({ method: 'POST', url: '/auth/guest' }));
     await app.inject({
       method: 'POST',

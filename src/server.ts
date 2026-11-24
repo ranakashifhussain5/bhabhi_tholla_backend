@@ -8,12 +8,13 @@ const jwtSecrets = {
   accessSecret: config.JWT_ACCESS_SECRET,
   refreshSecret: config.JWT_REFRESH_SECRET,
 };
-const app = buildApp({ prisma, jwtSecrets });
+const app = await buildApp({ prisma, jwtSecrets });
+let realtime: ReturnType<typeof attachSocketServer> | null = null;
 
 async function start(): Promise<void> {
   try {
     await app.ready();
-    attachSocketServer(app.server, { prisma, jwtSecrets });
+    realtime = attachSocketServer(app.server, { prisma, jwtSecrets });
     await app.listen({ port: config.PORT, host: '0.0.0.0' });
   } catch (err) {
     app.log.error(err);
@@ -23,6 +24,7 @@ async function start(): Promise<void> {
 
 async function shutdown(): Promise<void> {
   app.log.info('Shutting down...');
+  realtime?.shutdown();
   await app.close();
   process.exit(0);
 }

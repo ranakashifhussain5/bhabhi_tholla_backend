@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Server as HTTPServer } from 'node:http';
 import { Server as SocketIOServer, type DefaultEventsMap, type Socket } from 'socket.io';
+import { z } from 'zod';
 import type { JwtSecrets } from '../auth/index.js';
 import { verifyToken } from '../auth/index.js';
 import {
@@ -42,6 +43,8 @@ interface SocketData {
 export interface RealtimeServer {
   io: SocketIOServer;
   repository: RoomRepository;
+  /** Cancels every pending turn timer across every room - a setTimeout keeps running even after io/httpServer are closed. */
+  shutdown: () => void;
 }
 
 export interface AttachSocketServerOptions {
@@ -52,6 +55,26 @@ export interface AttachSocketServerOptions {
 }
 
 type AppSocket = Socket<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>;
+
+// A client only ever sends "play card X" (section 12) - everything it sends
+// is validated here at the boundary before any handler touches it. Game
+// legality is still the engine's job; this just rejects structurally bad
+// input cleanly instead of letting it crash something deeper.
+const cardSchema = z.object({
+  suit: z.enum(['S', 'H', 'D', 'C']),
+  rank: z.number().int().min(2).max(14),
+});
+const roomCodeSchema = z.object({ roomCode: z.string().min(1).max(20) });
+const roomIdSchema = z.object({ roomId: z.string().min(1) });
+const playCardSchema = z.object({ card: cardSchema });
+const chatSendSchema = z.object({ text: z.string() });
+const mutePayloadSchema = z.object({ mutedPlayerId: z.string().min(1) });
+const reportPayloadSchema = z.object({ reportedPlayerId: z.string().min(1), message: z.string() });
+
+function parsePayload<T>(schema: z.ZodType<T>, payload: unknown): T | null {
+  const result = schema.safeParse(payload);
+  return result.success ? result.data : null;
+}
 
 /**
  * Wires the room/gameplay/matchmaking primitives (already unit-tested on
@@ -174,8 +197,13 @@ export function attachSocketServer(
 
     socket.on(
       'privateroom:join',
-      (payload: { roomCode: string }, ack?: (res: { ok: boolean; error?: string }) => void) => {
-        const room = repository.findByRoomCode(payload.roomCode);
+      (payload: unknown, ack?: (res: { ok: boolean; error?: string }) => void) => {
+        const parsed = parsePayload(roomCodeSchema, payload);
+        if (!parsed) {
+          ack?.({ ok: false, error: 'invalid-payload' });
+          return;
+        }
+        const room = repository.findByRoomCode(parsed.roomCode);
         if (!room) {
           ack?.({ ok: false, error: 'room-not-found' });
           return;
@@ -212,7 +240,12 @@ export function attachSocketServer(
       }
     });
 
-    socket.on('play-card', (payload: { card: Card }, ack?: (res: { ok: boolean; error?: string }) => void) => {
+    socket.on('play-card', (payload: unknown, ack?: (res: { ok: boolean; error?: string }) => void) => {
+      const parsed = parsePayload(playCardSchema, payload);
+      if (!parsed) {
+        ack?.({ ok: false, error: 'invalid-payload' });
+        return;
+      }
       const room = currentRoom(socket);
       const binding = room?.seats.find((s) => s.socketId === socket.id);
       if (!room || !binding) {
@@ -220,7 +253,7 @@ export function attachSocketServer(
         return;
       }
       try {
-        applyHumanMove(room, timers, binding.seat, payload.card, notify);
+        applyHumanMove(room, timers, binding.seat, parsed.card as Card, notify);
         ack?.({ ok: true });
       } catch (err) {
         ack?.({ ok: false, error: err instanceof Error ? err.message : 'unknown' });
@@ -232,8 +265,13 @@ export function attachSocketServer(
       if (room) handleQuit(room, timers, socket.id, notify);
     });
 
-    socket.on('reclaim', (payload: { roomId: string }, ack?: (res: { ok: boolean }) => void) => {
-      const room = repository.get(payload.roomId);
+    socket.on('reclaim', (payload: unknown, ack?: (res: { ok: boolean }) => void) => {
+      const parsed = parsePayload(roomIdSchema, payload);
+      if (!parsed) {
+        ack?.({ ok: false });
+        return;
+      }
+      const room = repository.get(parsed.roomId);
       if (!room) {
         ack?.({ ok: false });
         return;
@@ -252,7 +290,12 @@ export function attachSocketServer(
       if (room) handleDisconnect(room, timers, socket.id, notify);
     });
 
-    socket.on('chat:send', (payload: { text: string }, ack?: (res: { ok: boolean; error?: string }) => void) => {
+    socket.on('chat:send', (payload: unknown, ack?: (res: { ok: boolean; error?: string }) => void) => {
+      const parsed = parsePayload(chatSendSchema, payload);
+      if (!parsed) {
+        ack?.({ ok: false, error: 'invalid-payload' });
+        return;
+      }
       const room = currentRoom(socket);
       const binding = room?.seats.find((s) => s.socketId === socket.id);
       if (!room || !binding) {
@@ -260,7 +303,7 @@ export function attachSocketServer(
         return;
       }
       try {
-        const message = createChatMessage(binding.seat, payload.text, profanityFilter);
+        const message = createChatMessage(binding.seat, parsed.text, profanityFilter);
         broadcastChatMessage(room, socket.data.playerId, message);
         ack?.({ ok: true });
       } catch (err) {
@@ -268,58 +311,64 @@ export function attachSocketServer(
       }
     });
 
-    socket.on(
-      'chat:mute',
-      (payload: { mutedPlayerId: string }, ack?: (res: { ok: boolean; error?: string }) => void) => {
-        void (async () => {
-          try {
-            await muteUser(prisma, socket.data.playerId, payload.mutedPlayerId);
-            socket.data.mutedUserIds = await getMutedUserIds(prisma, socket.data.playerId);
-            ack?.({ ok: true });
-          } catch (err) {
-            ack?.({ ok: false, error: err instanceof ChatError ? err.reason : 'unknown' });
-          }
-        })();
-      },
-    );
-
-    socket.on('chat:unmute', (payload: { mutedPlayerId: string }, ack?: (res: { ok: boolean }) => void) => {
+    socket.on('chat:mute', (payload: unknown, ack?: (res: { ok: boolean; error?: string }) => void) => {
+      const parsed = parsePayload(mutePayloadSchema, payload);
+      if (!parsed) {
+        ack?.({ ok: false, error: 'invalid-payload' });
+        return;
+      }
       void (async () => {
-        await unmuteUser(prisma, socket.data.playerId, payload.mutedPlayerId);
+        try {
+          await muteUser(prisma, socket.data.playerId, parsed.mutedPlayerId);
+          socket.data.mutedUserIds = await getMutedUserIds(prisma, socket.data.playerId);
+          ack?.({ ok: true });
+        } catch (err) {
+          ack?.({ ok: false, error: err instanceof ChatError ? err.reason : 'unknown' });
+        }
+      })();
+    });
+
+    socket.on('chat:unmute', (payload: unknown, ack?: (res: { ok: boolean }) => void) => {
+      const parsed = parsePayload(mutePayloadSchema, payload);
+      if (!parsed) {
+        ack?.({ ok: false });
+        return;
+      }
+      void (async () => {
+        await unmuteUser(prisma, socket.data.playerId, parsed.mutedPlayerId);
         socket.data.mutedUserIds = await getMutedUserIds(prisma, socket.data.playerId);
         ack?.({ ok: true });
       })();
     });
 
-    socket.on(
-      'chat:report',
-      (
-        payload: { reportedPlayerId: string; message: string },
-        ack?: (res: { ok: boolean; error?: string }) => void,
-      ) => {
-        void (async () => {
-          const room = currentRoom(socket);
-          if (!room) {
-            ack?.({ ok: false, error: 'not-in-a-room' });
-            return;
-          }
-          try {
-            await fileReport(prisma, {
-              reporterId: socket.data.playerId,
-              reportedId: payload.reportedPlayerId,
-              roomId: room.roomId,
-              message: payload.message,
-            });
-            ack?.({ ok: true });
-          } catch (err) {
-            ack?.({ ok: false, error: err instanceof ChatError ? err.reason : 'unknown' });
-          }
-        })();
-      },
-    );
+    socket.on('chat:report', (payload: unknown, ack?: (res: { ok: boolean; error?: string }) => void) => {
+      const parsed = parsePayload(reportPayloadSchema, payload);
+      if (!parsed) {
+        ack?.({ ok: false, error: 'invalid-payload' });
+        return;
+      }
+      void (async () => {
+        const room = currentRoom(socket);
+        if (!room) {
+          ack?.({ ok: false, error: 'not-in-a-room' });
+          return;
+        }
+        try {
+          await fileReport(prisma, {
+            reporterId: socket.data.playerId,
+            reportedId: parsed.reportedPlayerId,
+            roomId: room.roomId,
+            message: parsed.message,
+          });
+          ack?.({ ok: true });
+        } catch (err) {
+          ack?.({ ok: false, error: err instanceof ChatError ? err.reason : 'unknown' });
+        }
+      })();
+    });
   });
 
-  return { io, repository };
+  return { io, repository, shutdown: () => timers.clearAll() };
 }
 
 function findSocketIdForPlayer(

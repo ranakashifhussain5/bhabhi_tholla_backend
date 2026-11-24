@@ -70,4 +70,20 @@ describe('TurnTimerManager', () => {
     timers.clear('room-1');
     expect(timers.isRunning('room-1')).toBe(false);
   });
+
+  it('clearAll cancels every pending timer across all rooms', () => {
+    const timers = new TurnTimerManager({ timeoutMs: 1000 });
+    const first = vi.fn();
+    const second = vi.fn();
+
+    timers.start('room-1', first);
+    timers.start('room-2', second);
+    timers.clearAll();
+    vi.advanceTimersByTime(10_000);
+
+    expect(first).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
+    expect(timers.isRunning('room-1')).toBe(false);
+    expect(timers.isRunning('room-2')).toBe(false);
+  });
 });

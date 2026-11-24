@@ -33,4 +33,12 @@ export class TurnTimerManager {
   isRunning(roomId: string): boolean {
     return this.timers.has(roomId);
   }
+
+  /** Cancels every pending timer. For graceful shutdown: a plain setTimeout keeps running even after the socket server it serves is closed. */
+  clearAll(): void {
+    for (const timer of this.timers.values()) {
+      clearTimeout(timer);
+    }
+    this.timers.clear();
+  }
 }
