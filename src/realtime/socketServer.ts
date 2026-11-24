@@ -47,11 +47,24 @@ export interface RealtimeServer {
   shutdown: () => void;
 }
 
+export interface RealtimeLogger {
+  info(message: string): void;
+  warn(message: string): void;
+  error(message: string): void;
+}
+
+const consoleLogger: RealtimeLogger = {
+  info: (message) => console.log(message),
+  warn: (message) => console.warn(message),
+  error: (message) => console.error(message),
+};
+
 export interface AttachSocketServerOptions {
   turnTimeoutMs?: number;
   prisma: PrismaClient;
   jwtSecrets: JwtSecrets;
   profanityFilter?: ProfanityFilter;
+  logger?: RealtimeLogger;
 }
 
 type AppSocket = Socket<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>;
@@ -95,6 +108,7 @@ export function attachSocketServer(
   );
   const { prisma, jwtSecrets } = options;
   const profanityFilter = options.profanityFilter ?? defaultProfanityFilter;
+  const logger = options.logger ?? consoleLogger;
 
   io.use((socket, next) => {
     void (async () => {
@@ -117,8 +131,9 @@ export function attachSocketServer(
       io.to(seat.socketId).emit('room:state', buildPlayerView(room, seat.seat));
     }
     if (room.state?.gameOver) {
+      logger.info(`Game ended for room ${room.roomId} (mode=${room.mode})`);
       void persistGameResult(prisma, room).catch((err: unknown) => {
-        console.error(`Failed to persist game result for room ${room.roomId}`, err);
+        logger.error(`Failed to persist game result for room ${room.roomId}: ${String(err)}`);
       });
     }
   }
@@ -144,6 +159,8 @@ export function attachSocketServer(
     const room = createLobbyRoom({ roomId: randomUUID(), mode: 'quick-play', affectsRank: true });
     repository.create(room);
     startGame(room, entries.map((e) => e?.playerId ?? null));
+    const botCount = entries.filter((e) => e === null).length;
+    logger.info(`Quick-play game started for room ${room.roomId} (${botCount} bot-filled seat(s))`);
 
     for (const entry of entries) {
       if (entry) bindSocketToSeat(room, entry.playerId, entry.socketId);
@@ -229,6 +246,7 @@ export function attachSocketServer(
       }
       try {
         startPrivateRoom(room, playerId);
+        logger.info(`Private game started for room ${room.roomId} (${room.pendingPlayerIds.length} players)`);
         for (const pendingId of room.pendingPlayerIds) {
           bindSocketToSeat(room, pendingId, findSocketIdForPlayer(io, room.roomId, pendingId) ?? '');
         }
@@ -287,7 +305,11 @@ export function attachSocketServer(
 
     socket.on('disconnect', () => {
       const room = currentRoom(socket);
-      if (room) handleDisconnect(room, timers, socket.id, notify);
+      if (!room) return;
+      const binding = handleDisconnect(room, timers, socket.id, notify);
+      if (binding) {
+        logger.warn(`Player ${binding.playerId} disconnected from room ${room.roomId} (seat ${binding.seat})`);
+      }
     });
 
     socket.on('chat:send', (payload: unknown, ack?: (res: { ok: boolean; error?: string }) => void) => {

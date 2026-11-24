@@ -14,7 +14,7 @@ let realtime: ReturnType<typeof attachSocketServer> | null = null;
 async function start(): Promise<void> {
   try {
     await app.ready();
-    realtime = attachSocketServer(app.server, { prisma, jwtSecrets });
+    realtime = attachSocketServer(app.server, { prisma, jwtSecrets, logger: app.log });
     await app.listen({ port: config.PORT, host: '0.0.0.0' });
   } catch (err) {
     app.log.error(err);
