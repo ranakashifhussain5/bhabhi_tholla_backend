@@ -236,7 +236,7 @@ Files to touch: `Dockerfile`, `docker-compose.yml`, `src/**` (hardening touch-up
 | --- | --- |
 | 0: Project foundation | Done — git/TS/ESLint/Prettier/Vitest/Fastify all verified green, including a live Postgres connectivity check (see Open environment gap note: native install, not Docker). |
 | 1: Core game engine | Done — deck/deal, first round, normal round, finish/escape/Bhabhi logic, move validator facade. 47 tests passing (unit + a 100-game random-move simulation across 3-6 players, re-run 5x for flakiness, all stable). |
-| 2: Bot AI | Not started |
+| 2: Bot AI | Done — heuristics for forced/safe/risky/thulla-dump decisions (section 9), plus a Monte Carlo rollout for the one genuinely ambiguous decision (which card to lead with as round-starter). Shared `decideMove` entry point used for bot seats, timeouts, and disconnects alike - no separate wrapper needed since there's only one function. 20 tests, including a full bot-vs-bot simulation across 3-6 players (stable across repeated runs). Caught and fixed a real bug during this phase: a picked-up thulla pile was wrongly tracked as "permanently discarded," starving the opponent-hand sampler. |
 | 3: Realtime orchestration | Not started |
 | 4: Accounts, persistence & rank | Not started |
 | 5: Chat & moderation | Not started |
