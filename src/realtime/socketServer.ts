@@ -3,6 +3,16 @@ import type { Server as HTTPServer } from 'node:http';
 import { Server as SocketIOServer, type DefaultEventsMap, type Socket } from 'socket.io';
 import type { JwtSecrets } from '../auth/index.js';
 import { verifyToken } from '../auth/index.js';
+import {
+  ChatError,
+  createChatMessage,
+  defaultProfanityFilter,
+  fileReport,
+  getMutedUserIds,
+  muteUser,
+  unmuteUser,
+} from '../chat/index.js';
+import type { ChatMessage, ProfanityFilter } from '../chat/index.js';
 import { persistGameResult } from '../db/results.js';
 import type { Card } from '../engine/index.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
@@ -26,6 +36,7 @@ import { TurnTimerManager } from './turnTimer.js';
 interface SocketData {
   roomId?: string;
   playerId: string;
+  mutedUserIds: Set<string>;
 }
 
 export interface RealtimeServer {
@@ -37,7 +48,10 @@ export interface AttachSocketServerOptions {
   turnTimeoutMs?: number;
   prisma: PrismaClient;
   jwtSecrets: JwtSecrets;
+  profanityFilter?: ProfanityFilter;
 }
+
+type AppSocket = Socket<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>;
 
 /**
  * Wires the room/gameplay/matchmaking primitives (already unit-tested on
@@ -57,13 +71,16 @@ export function attachSocketServer(
     options.turnTimeoutMs === undefined ? {} : { timeoutMs: options.turnTimeoutMs },
   );
   const { prisma, jwtSecrets } = options;
+  const profanityFilter = options.profanityFilter ?? defaultProfanityFilter;
 
   io.use((socket, next) => {
     void (async () => {
       try {
         const token = socket.handshake.auth.token as unknown;
         if (typeof token !== 'string') throw new Error('missing-token');
-        socket.data.playerId = await verifyToken(token, jwtSecrets.accessSecret);
+        const playerId = await verifyToken(token, jwtSecrets.accessSecret);
+        socket.data.playerId = playerId;
+        socket.data.mutedUserIds = await getMutedUserIds(prisma, playerId);
         next();
       } catch {
         next(new Error('unauthorized'));
@@ -120,13 +137,23 @@ export function attachSocketServer(
 
   const matchmaker = new QuickPlayMatchmaker(startQuickPlayRoom);
 
-  function currentRoom(socket: Socket<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>): Room | null {
+  /** A muted player's messages are excluded only from the muter's own stream (GAME_RULES.md section 11). */
+  function broadcastChatMessage(room: Room, senderPlayerId: string, message: ChatMessage): void {
+    for (const seat of room.seats) {
+      if (seat.isBot || seat.socketId === null) continue;
+      const recipient = io.sockets.sockets.get(seat.socketId) as AppSocket | undefined;
+      if (recipient?.data.mutedUserIds.has(senderPlayerId)) continue;
+      io.to(seat.socketId).emit('chat:message', message);
+    }
+  }
+
+  function currentRoom(socket: AppSocket): Room | null {
     const roomId = socket.data.roomId;
     if (!roomId) return null;
     return repository.get(roomId) ?? null;
   }
 
-  io.on('connection', (socket: Socket<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>) => {
+  io.on('connection', (socket: AppSocket) => {
     socket.on('quickplay:join', () => {
       matchmaker.join(socket.data.playerId, socket.id);
     });
@@ -224,6 +251,72 @@ export function attachSocketServer(
       const room = currentRoom(socket);
       if (room) handleDisconnect(room, timers, socket.id, notify);
     });
+
+    socket.on('chat:send', (payload: { text: string }, ack?: (res: { ok: boolean; error?: string }) => void) => {
+      const room = currentRoom(socket);
+      const binding = room?.seats.find((s) => s.socketId === socket.id);
+      if (!room || !binding) {
+        ack?.({ ok: false, error: 'not-in-a-game' });
+        return;
+      }
+      try {
+        const message = createChatMessage(binding.seat, payload.text, profanityFilter);
+        broadcastChatMessage(room, socket.data.playerId, message);
+        ack?.({ ok: true });
+      } catch (err) {
+        ack?.({ ok: false, error: err instanceof ChatError ? err.reason : 'unknown' });
+      }
+    });
+
+    socket.on(
+      'chat:mute',
+      (payload: { mutedPlayerId: string }, ack?: (res: { ok: boolean; error?: string }) => void) => {
+        void (async () => {
+          try {
+            await muteUser(prisma, socket.data.playerId, payload.mutedPlayerId);
+            socket.data.mutedUserIds = await getMutedUserIds(prisma, socket.data.playerId);
+            ack?.({ ok: true });
+          } catch (err) {
+            ack?.({ ok: false, error: err instanceof ChatError ? err.reason : 'unknown' });
+          }
+        })();
+      },
+    );
+
+    socket.on('chat:unmute', (payload: { mutedPlayerId: string }, ack?: (res: { ok: boolean }) => void) => {
+      void (async () => {
+        await unmuteUser(prisma, socket.data.playerId, payload.mutedPlayerId);
+        socket.data.mutedUserIds = await getMutedUserIds(prisma, socket.data.playerId);
+        ack?.({ ok: true });
+      })();
+    });
+
+    socket.on(
+      'chat:report',
+      (
+        payload: { reportedPlayerId: string; message: string },
+        ack?: (res: { ok: boolean; error?: string }) => void,
+      ) => {
+        void (async () => {
+          const room = currentRoom(socket);
+          if (!room) {
+            ack?.({ ok: false, error: 'not-in-a-room' });
+            return;
+          }
+          try {
+            await fileReport(prisma, {
+              reporterId: socket.data.playerId,
+              reportedId: payload.reportedPlayerId,
+              roomId: room.roomId,
+              message: payload.message,
+            });
+            ack?.({ ok: true });
+          } catch (err) {
+            ack?.({ ok: false, error: err instanceof ChatError ? err.reason : 'unknown' });
+          }
+        })();
+      },
+    );
   });
 
   return { io, repository };

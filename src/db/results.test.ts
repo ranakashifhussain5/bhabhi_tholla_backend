@@ -159,4 +159,27 @@ describe('persistGameResult', () => {
     expect(participants).toHaveLength(1);
     expect(participants[0]?.seat).toBe(0);
   });
+
+  it('backfills gameId on reports filed during the live game, by roomId', async () => {
+    const users = await Promise.all(Array.from({ length: 2 }, () => prisma.user.create({ data: {} })));
+    const userIds = users.map((u) => u.id);
+    const room = makeFinishedRoom({
+      affectsRank: false,
+      userIds,
+      finishOrder: [
+        { seat: 0, position: 1 },
+        { seat: 1, position: 2 },
+      ],
+    });
+
+    await prisma.report.create({
+      data: { reporterId: userIds[0]!, reportedId: userIds[1]!, roomId: room.roomId, message: 'rude chat' },
+    });
+
+    await persistGameResult(prisma, room);
+
+    const game = await prisma.game.findFirst({ where: { mode: 'private' } });
+    const report = await prisma.report.findFirst({ where: { roomId: room.roomId } });
+    expect(report?.gameId).toBe(game?.id);
+  });
 });

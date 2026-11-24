@@ -18,6 +18,8 @@ model User {
   participations GameParticipant[]
   reportsFiled    Report[]          @relation("ReportsFiled")
   reportsReceived Report[]          @relation("ReportsReceived")
+  mutesFiled      Mute[]            @relation("MutesFiled")
+  mutesReceived   Mute[]            @relation("MutesReceived")
 }
 
 model Game {
@@ -51,6 +53,10 @@ model Report {
   id         String   @id @default(uuid())
   reporterId String
   reportedId String
+  // The live room a report was filed in. A game isn't persisted (no Game
+  // row exists) until it ends, so this is captured immediately; gameId is
+  // backfilled by persistGameResult once that room's game is written.
+  roomId     String?
   gameId     String?
   message    String
   createdAt  DateTime @default(now())
@@ -58,4 +64,16 @@ model Report {
   reporter User  @relation("ReportsFiled", fields: [reporterId], references: [id])
   reported User  @relation("ReportsReceived", fields: [reportedId], references: [id])
   game     Game? @relation(fields: [gameId], references: [id])
+}
+
+model Mute {
+  id        String   @id @default(uuid())
+  muterId   String
+  mutedId   String
+  createdAt DateTime @default(now())
+
+  muter User @relation("MutesFiled", fields: [muterId], references: [id])
+  muted User @relation("MutesReceived", fields: [mutedId], references: [id])
+
+  @@unique([muterId, mutedId])
 }

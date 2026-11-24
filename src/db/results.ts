@@ -23,6 +23,13 @@ export async function persistGameResult(prisma: PrismaClient, room: Room): Promi
     },
   });
 
+  // Reports filed during the live game (see src/chat/report.ts) only had a
+  // roomId to attach to, since this Game row didn't exist yet - link them now.
+  await prisma.report.updateMany({
+    where: { roomId: room.roomId, gameId: null },
+    data: { gameId: game.id },
+  });
+
   for (const seat of room.seats) {
     if (seat.playerId === null) continue;
 

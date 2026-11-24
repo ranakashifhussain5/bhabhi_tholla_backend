@@ -155,4 +155,72 @@ describe('socketServer integration (real socket.io-client)', () => {
     },
     30_000,
   );
+
+  it(
+    "excludes a muted player's chat messages only from the muter's own stream",
+    async () => {
+      const [alice, bob, carol] = await Promise.all(
+        Array.from({ length: 3 }, () => createGuestSession(prisma, jwtSecrets)),
+      );
+      const aliceSocket = connect(alice!.tokens.accessToken);
+      const bobSocket = connect(bob!.tokens.accessToken);
+      const carolSocket = connect(carol!.tokens.accessToken);
+
+      const created = await new Promise<{ roomId: string; roomCode: string }>((resolve) => {
+        aliceSocket.emit('privateroom:create', {}, resolve);
+      });
+
+      await Promise.all(
+        [bobSocket, carolSocket].map(
+          (socket) =>
+            new Promise<void>((resolve) => {
+              socket.emit('privateroom:join', { roomCode: created.roomCode }, (res: AckResponse) => {
+                expect(res.ok).toBe(true);
+                resolve();
+              });
+            }),
+        ),
+      );
+
+      const gameStarted = Promise.all(
+        [aliceSocket, bobSocket, carolSocket].map(
+          (socket) => new Promise<void>((resolve) => socket.once('room:state', () => resolve())),
+        ),
+      );
+      await new Promise<void>((resolve) => {
+        aliceSocket.emit('privateroom:start', {}, (res: AckResponse) => {
+          expect(res.ok).toBe(true);
+          resolve();
+        });
+      });
+      await gameStarted;
+
+      await new Promise<void>((resolve) => {
+        aliceSocket.emit('chat:mute', { mutedPlayerId: bob!.userId }, (res: AckResponse) => {
+          expect(res.ok).toBe(true);
+          resolve();
+        });
+      });
+
+      let aliceReceivedMessage = false;
+      aliceSocket.on('chat:message', () => {
+        aliceReceivedMessage = true;
+      });
+      const carolReceived = new Promise<{ text: string }>((resolve) => {
+        carolSocket.once('chat:message', resolve);
+      });
+
+      await new Promise<void>((resolve) => {
+        bobSocket.emit('chat:send', { text: 'hello everyone' }, (res: AckResponse) => {
+          expect(res.ok).toBe(true);
+          resolve();
+        });
+      });
+
+      const message = await carolReceived;
+      expect(message.text).toBe('hello everyone');
+      expect(aliceReceivedMessage).toBe(false);
+    },
+    15_000,
+  );
 });
