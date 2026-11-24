@@ -43,6 +43,19 @@ describe('linkEmailPassword', () => {
     await linkEmailPassword(prisma, guest.userId, 'same@example.com', 'password123');
     await expect(linkEmailPassword(prisma, guest.userId, 'same@example.com', 'new-password')).resolves.not.toThrow();
   });
+
+  it('normalizes email case, so differently-cased emails cannot collide or diverge', async () => {
+    const first = await createGuestSession(prisma, secrets);
+    const second = await createGuestSession(prisma, secrets);
+    await linkEmailPassword(prisma, first.userId, 'Mixed@Example.com', 'password123');
+
+    const user = await prisma.user.findUnique({ where: { id: first.userId } });
+    expect(user?.email).toBe('mixed@example.com');
+
+    await expect(linkEmailPassword(prisma, second.userId, 'mixed@example.com', 'other-pass')).rejects.toThrow(
+      AuthError,
+    );
+  });
 });
 
 describe('loginWithEmailPassword', () => {
@@ -65,5 +78,13 @@ describe('loginWithEmailPassword', () => {
     await expect(loginWithEmailPassword(prisma, secrets, 'nobody@example.com', 'anything')).rejects.toThrow(
       AuthError,
     );
+  });
+
+  it('logs in with a differently-cased email than was used to link', async () => {
+    const guest = await createGuestSession(prisma, secrets);
+    await linkEmailPassword(prisma, guest.userId, 'CaseTest@Example.com', 'correct-password');
+
+    const tokens = await loginWithEmailPassword(prisma, secrets, 'casetest@example.com', 'correct-password');
+    expect(tokens.accessToken).toBeTruthy();
   });
 });

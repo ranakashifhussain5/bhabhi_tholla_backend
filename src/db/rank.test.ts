@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampRankPoints, computePointsDelta, tierForPoints } from './rank.js';
+import { computePointsDelta, tierForPoints } from './rank.js';
 
 describe('computePointsDelta', () => {
   it('matches the section 10 points table for each quick-play position', () => {
@@ -16,14 +16,6 @@ describe('computePointsDelta', () => {
 
   it('throws for a position outside the 4-player quick-play table', () => {
     expect(() => computePointsDelta(5, false)).toThrow(/no rank points mapping/);
-  });
-});
-
-describe('clampRankPoints', () => {
-  it('never goes below zero', () => {
-    expect(clampRankPoints(-40)).toBe(0);
-    expect(clampRankPoints(0)).toBe(0);
-    expect(clampRankPoints(100)).toBe(100);
   });
 });
 

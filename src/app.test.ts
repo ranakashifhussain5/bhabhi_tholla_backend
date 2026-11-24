@@ -113,6 +113,19 @@ describe('POST /auth/link and /auth/login', () => {
     expect(asTokenPair(loginResponse).accessToken).toBeTruthy();
   });
 
+  it('rejects a password over the length cap', async () => {
+    const app = makeApp();
+    const guest = asGuestSession(await app.inject({ method: 'POST', url: '/auth/guest' }));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/link',
+      headers: { authorization: `Bearer ${guest.tokens.accessToken}` },
+      payload: { email: 'toolong@example.com', password: 'a'.repeat(73) },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
   it('rejects linking without a valid access token', async () => {
     const app = makeApp();
     const response = await app.inject({

@@ -20,10 +20,6 @@ export function computePointsDelta(position: number, quitVoluntarily: boolean): 
   return delta;
 }
 
-export function clampRankPoints(points: number): number {
-  return Math.max(0, points);
-}
-
 export function tierForPoints(points: number): Tier {
   if (points >= 4500) return 'Master';
   if (points >= 3000) return 'Diamond';

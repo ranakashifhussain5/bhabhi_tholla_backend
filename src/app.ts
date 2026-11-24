@@ -16,7 +16,12 @@ export interface AppDeps {
   jwtSecrets: JwtSecrets;
 }
 
-const emailPasswordSchema = z.object({ email: z.string().email(), password: z.string().min(8) });
+// Capped at 72 (the common bcrypt-era convention) so an arbitrarily long
+// input can't make scrypt do proportionally more work - a trivial DoS vector.
+const emailPasswordSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8).max(72),
+});
 const refreshBodySchema = z.object({ refreshToken: z.string().min(1) });
 
 export function buildApp(deps: AppDeps): FastifyInstance {

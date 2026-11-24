@@ -10,6 +10,10 @@ export class AuthError extends Error {
   }
 }
 
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 /** Upgrades an existing (guest) user in place with an email/password - no new row, no lost history. */
 export async function linkEmailPassword(
   prisma: PrismaClient,
@@ -17,13 +21,14 @@ export async function linkEmailPassword(
   email: string,
   password: string,
 ): Promise<void> {
-  const existing = await prisma.user.findUnique({ where: { email } });
+  const normalizedEmail = normalizeEmail(email);
+  const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
   if (existing && existing.id !== userId) {
     throw new AuthError('email-already-in-use');
   }
 
   const passwordHash = await hashPassword(password);
-  await prisma.user.update({ where: { id: userId }, data: { email, passwordHash } });
+  await prisma.user.update({ where: { id: userId }, data: { email: normalizedEmail, passwordHash } });
 }
 
 /** Lets a player who linked email/password on one device get back into the same account from another. */
@@ -33,7 +38,7 @@ export async function loginWithEmailPassword(
   email: string,
   password: string,
 ): Promise<TokenPair> {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prisma.user.findUnique({ where: { email: normalizeEmail(email) } });
   if (!user?.passwordHash || !(await verifyPassword(password, user.passwordHash))) {
     throw new AuthError('invalid-credentials');
   }
