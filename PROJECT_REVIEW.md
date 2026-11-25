@@ -7,12 +7,13 @@ time of this review (see [plans/archive/backend-build.md](plans/archive/backend-
 for the phase-by-phase build history and decision log).
 
 **Verification at time of writing**: `tsc --noEmit` clean, `eslint .` clean (0
-errors), `npm run build` succeeds, **194/194 tests passing** (re-run multiple
+errors), `npm run build` succeeds, **205/205 tests passing** (re-run multiple
 times for stability). Updated after follow-up hardening passes that turned
 five of the judgment calls below into fixes (JWT secret strength/collision,
 access/refresh token typing, chat message trimming, profanity word-boundary
-matching, token revocation/single-session enforcement), plus retrying and
-dead-lettering game-result writes on DB failure (see section 1 for details).
+matching, token revocation/single-session enforcement), retrying and
+dead-lettering game-result writes on DB failure, and per-connection flood
+control on chat/report/join/quick-play (see section 1 for details).
 
 ---
 
@@ -117,6 +118,18 @@ connection quietly take over). Covered by new tests at every layer (JWT
 claim extraction, the DB version check, the REST round trip, and the socket
 kick).
 
+### `src/realtime/rateLimiter.ts` — per-connection flood control
+`quickplay:join`, `privateroom:join`, `chat:send`, and `chat:report` are now
+rate-limited per connection (a sliding window per socket per category). The
+first time a connection crosses a category's limit, the action is rejected
+with a warning; flooding again after that escalates - `chat:send` gets a
+temporary mute (every further message rejected until it expires, without
+needing to re-cross the window each time), everything else disconnects the
+connection outright. Covered by unit tests on the limiter itself (window,
+escalation, mute expiry, per-socket/per-category isolation) and two
+integration tests that actually flood a live socket connection and observe
+the warning, the mute, and the disconnect.
+
 ---
 
 ## 2. Reviewed and deliberately left alone
@@ -194,6 +207,10 @@ Everything that makes the game playable over a network:
   never another player's actual cards.
 - Finished games are now correctly cleaned out of memory (the bug fixed
   above) instead of accumulating forever.
+- Only one active connection per account - a second one kicks the first
+  (with notice) instead of silently sharing control.
+- Joining, chatting, and reporting are all rate-limited per connection, with
+  escalating consequences for repeat flooding.
 
 ### `src/auth/` — identity
 - New players get a usable account instantly with no signup step (a "guest"

@@ -103,6 +103,19 @@ database lookup on every request.
 Only one socket connection is allowed per account at a time: connecting a
 second one disconnects the first (see `session:kicked` below).
 
+### Flood control
+
+`quickplay:join`, `privateroom:join`, `chat:send`, and `chat:report` are
+rate-limited per connection. The first time a connection crosses a
+category's limit, that action is rejected (ack: `{ ok: false, error:
+"rate-limited" }`) and the server sends `rate-limit` with `{ event, action:
+"warning" }`. Flooding again after the warning escalates: `chat:send` gets a
+temporary mute (every further message rejected with `"rate-limited-muted"`
+until it expires, `rate-limit`'s payload adds `durationMs`); every other
+category disconnects the connection outright (ack error
+`"rate-limited-disconnected"`, then `rate-limit` with `action:
+"disconnected"`, then the socket is closed).
+
 ## Socket.IO contract
 
 Connect with the access token in the handshake auth payload:
@@ -140,6 +153,7 @@ responds with at least `{ ok: boolean, error?: string }`.
 | `privateroom:lobby` | `{ pendingPlayerIds }` - broadcast to a private room's lobby as players join |
 | `chat:message` | `{ seat, text, sentAt }` - never sent to a socket that has muted the sender |
 | `session:kicked` | `{ reason: "signed-in-elsewhere" }` - sent to a connection right before the server disconnects it because the same account connected again elsewhere |
+| `rate-limit` | `{ event, action: "warning" \| "muted" \| "disconnected", durationMs? }` - flood control on `event` (see below); `durationMs` is only present for `"muted"` |
 
 ### Quick phrases
 

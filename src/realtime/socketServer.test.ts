@@ -7,6 +7,8 @@ import { createGuestSession } from '../auth/index.js';
 import { prisma } from '../db/client.js';
 import { resetDb } from '../db/testHelpers.js';
 import type { PlayerView } from './projection.js';
+import { DEFAULT_RATE_LIMITS } from './rateLimiter.js';
+import type { RateLimitCategory, RateLimitConfig } from './rateLimiter.js';
 import { attachSocketServer } from './socketServer.js';
 import type { RealtimeServer } from './socketServer.js';
 
@@ -47,9 +49,19 @@ interface TestServer {
   baseUrl: string;
 }
 
-async function createTestServer(turnTimeoutMs: number): Promise<TestServer> {
+async function createTestServer(
+  turnTimeoutMs: number,
+  rateLimits?: Readonly<Record<RateLimitCategory, RateLimitConfig>>,
+  rateLimitMuteMs?: number,
+): Promise<TestServer> {
   const httpServer = createServer();
-  const realtime = attachSocketServer(httpServer, { turnTimeoutMs, prisma, jwtSecrets });
+  const realtime = attachSocketServer(httpServer, {
+    turnTimeoutMs,
+    prisma,
+    jwtSecrets,
+    ...(rateLimits ? { rateLimits } : {}),
+    ...(rateLimitMuteMs === undefined ? {} : { rateLimitMuteMs }),
+  });
   await new Promise<void>((resolve) => {
     httpServer.listen(0, resolve);
   });
@@ -380,4 +392,91 @@ describe('socketServer integration (real socket.io-client)', () => {
       pool.closeAll();
     }
   });
+
+  it(
+    'disconnects a connection that floods chat:report past the warning',
+    async () => {
+      const floodServer = await createTestServer(SAFE_TURN_TIMEOUT_MS, {
+        ...DEFAULT_RATE_LIMITS,
+        'chat:report': { windowMs: 10_000, max: 2 },
+      });
+      const pool = new SocketPool();
+      try {
+        const guest = await createGuestSession(prisma, jwtSecrets);
+        const socket = pool.connect(floodServer.baseUrl, guest.tokens.accessToken);
+        await new Promise<void>((resolve) => socket.on('connect', resolve));
+
+        const report = () => socket.emit('chat:report', { reportedPlayerId: 'someone', message: 'spam' });
+
+        report(); // 1 - within budget
+        report(); // 2 - within budget
+
+        const warned = new Promise<{ event: string; action: string }>((resolve) => {
+          socket.once('rate-limit', resolve);
+        });
+        report(); // 3 - over budget: warned, action still rejected
+        expect((await warned).action).toBe('warning');
+
+        const disconnected = new Promise<void>((resolve) => socket.once('disconnect', () => resolve()));
+        report(); // 4 - flooding again after the warning: disconnected
+        await disconnected;
+        expect(socket.connected).toBe(false);
+      } finally {
+        pool.closeAll();
+        await closeTestServer(floodServer);
+      }
+    },
+    10_000,
+  );
+
+  it(
+    'mutes (rather than disconnects) a connection that floods chat:send, and recovers once the mute expires',
+    async () => {
+      const floodServer = await createTestServer(
+        SAFE_TURN_TIMEOUT_MS,
+        { ...DEFAULT_RATE_LIMITS, 'chat:send': { windowMs: 200, max: 2 } },
+        500, // short mute, just for this test, so it doesn't need to wait a real 60s
+      );
+      const pool = new SocketPool();
+      try {
+        const guest = await createGuestSession(prisma, jwtSecrets);
+        const socket = pool.connect(floodServer.baseUrl, guest.tokens.accessToken);
+        await new Promise<void>((resolve) => socket.on('connect', resolve));
+
+        const chat = () =>
+          new Promise<AckResponse>((resolve) => {
+            socket.emit('chat:send', { text: 'spam' }, resolve);
+          });
+
+        await chat(); // 1 - within budget (rejected for an unrelated reason: not in a game)
+        await chat(); // 2 - within budget
+
+        const warned = new Promise<{ action: string }>((resolve) => socket.once('rate-limit', resolve));
+        const thirdAck = await chat(); // 3 - over budget: warned
+        expect(thirdAck.error).toBe('rate-limited');
+        expect((await warned).action).toBe('warning');
+
+        const muted = new Promise<{ action: string; durationMs: number }>((resolve) =>
+          socket.once('rate-limit', resolve),
+        );
+        const fourthAck = await chat(); // 4 - flooding again: muted, not disconnected
+        expect(fourthAck.error).toBe('rate-limited-muted');
+        expect((await muted).action).toBe('muted');
+        expect(socket.connected).toBe(true);
+
+        const fifthAck = await chat(); // still muted
+        expect(fifthAck.error).toBe('rate-limited-muted');
+
+        await new Promise((resolve) => setTimeout(resolve, 600)); // past the mute duration
+
+        const recoveredAck = await chat();
+        expect(recoveredAck.error).not.toBe('rate-limited-muted');
+        expect(recoveredAck.error).not.toBe('rate-limited');
+      } finally {
+        pool.closeAll();
+        await closeTestServer(floodServer);
+      }
+    },
+    10_000,
+  );
 });

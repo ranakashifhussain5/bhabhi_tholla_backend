@@ -28,6 +28,8 @@ import {
   startPrivateRoom,
 } from './privateRoom.js';
 import { buildPlayerView } from './projection.js';
+import { DEFAULT_RATE_LIMITS, SocketRateLimiter } from './rateLimiter.js';
+import type { RateLimitCategory, RateLimitConfig } from './rateLimiter.js';
 import { createLobbyRoom, findSeatByPlayerId, startGame } from './room.js';
 import type { Room } from './room.js';
 import { InMemoryRoomRepository } from './roomRepository.js';
@@ -65,6 +67,10 @@ export interface AttachSocketServerOptions {
   jwtSecrets: JwtSecrets;
   profanityFilter?: ProfanityFilter;
   logger?: RealtimeLogger;
+  /** Overrides the default per-category flood-control limits - mainly for tests, so a flood doesn't need real wall-clock time to trigger. */
+  rateLimits?: Readonly<Record<RateLimitCategory, RateLimitConfig>>;
+  /** Overrides the default 60s chat:send mute duration - mainly for tests. */
+  rateLimitMuteMs?: number;
 }
 
 type AppSocket = Socket<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>;
@@ -108,9 +114,40 @@ export function attachSocketServer(
   );
   /** One active connection per account at a time - a new one kicks the previous socket off (section: single-session enforcement). */
   const activeConnections = new Map<string, string>();
+  const rateLimiter = new SocketRateLimiter(options.rateLimits ?? DEFAULT_RATE_LIMITS, options.rateLimitMuteMs);
   const { prisma, jwtSecrets } = options;
   const profanityFilter = options.profanityFilter ?? defaultProfanityFilter;
   const logger = options.logger ?? consoleLogger;
+
+  /**
+   * Flood control for the abuse-prone events (chat, reports, joining). A
+   * first crossing of a category's limit is just a warning (the action is
+   * still rejected); flooding again after that escalates - chat gets a
+   * temporary mute, everything else gets disconnected.
+   */
+  function enforceRateLimit(
+    socket: AppSocket,
+    category: RateLimitCategory,
+    ack?: (res: { ok: boolean; error?: string }) => void,
+  ): boolean {
+    const outcome = rateLimiter.check(socket.id, category);
+    if (outcome.allowed) return true;
+
+    if (outcome.action === 'warn') {
+      socket.emit('rate-limit', { event: category, action: 'warning' });
+      ack?.({ ok: false, error: 'rate-limited' });
+      return false;
+    }
+    if (outcome.action === 'mute') {
+      socket.emit('rate-limit', { event: category, action: 'muted', durationMs: outcome.muteMs });
+      ack?.({ ok: false, error: 'rate-limited-muted' });
+      return false;
+    }
+    socket.emit('rate-limit', { event: category, action: 'disconnected' });
+    ack?.({ ok: false, error: 'rate-limited-disconnected' });
+    socket.disconnect(true);
+    return false;
+  }
 
   io.use((socket, next) => {
     void (async () => {
@@ -211,6 +248,7 @@ export function attachSocketServer(
     activeConnections.set(playerId, socket.id);
 
     socket.on('quickplay:join', () => {
+      if (!enforceRateLimit(socket, 'quickplay:join')) return;
       matchmaker.join(socket.data.playerId, socket.id);
     });
 
@@ -231,6 +269,7 @@ export function attachSocketServer(
     socket.on(
       'privateroom:join',
       (payload: unknown, ack?: (res: { ok: boolean; error?: string }) => void) => {
+        if (!enforceRateLimit(socket, 'privateroom:join', ack)) return;
         const parsed = parsePayload(roomCodeSchema, payload);
         if (!parsed) {
           ack?.({ ok: false, error: 'invalid-payload' });
@@ -326,6 +365,7 @@ export function attachSocketServer(
       if (activeConnections.get(playerId) === socket.id) {
         activeConnections.delete(playerId);
       }
+      rateLimiter.clear(socket.id);
 
       const room = currentRoom(socket);
       if (!room) return;
@@ -336,6 +376,7 @@ export function attachSocketServer(
     });
 
     socket.on('chat:send', (payload: unknown, ack?: (res: { ok: boolean; error?: string }) => void) => {
+      if (!enforceRateLimit(socket, 'chat:send', ack)) return;
       const parsed = parsePayload(chatSendSchema, payload);
       if (!parsed) {
         ack?.({ ok: false, error: 'invalid-payload' });
@@ -391,6 +432,7 @@ export function attachSocketServer(
     });
 
     socket.on('chat:report', (payload: unknown, ack?: (res: { ok: boolean; error?: string }) => void) => {
+      if (!enforceRateLimit(socket, 'chat:report', ack)) return;
       const parsed = parsePayload(reportPayloadSchema, payload);
       if (!parsed) {
         ack?.({ ok: false, error: 'invalid-payload' });
