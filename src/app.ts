@@ -10,6 +10,7 @@ import {
   verifyToken,
 } from './auth/index.js';
 import type { JwtSecrets } from './auth/index.js';
+import { tierForPoints } from './db/rank.js';
 import type { PrismaClient } from './generated/prisma/client.js';
 
 export interface AppDeps {
@@ -95,6 +96,21 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       }
     },
   );
+
+  app.get('/me', async (request, reply) => {
+    const userId = await requireUserId(request, jwtSecrets);
+    if (!userId) return reply.code(401).send({ error: 'unauthorized' });
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return reply.code(401).send({ error: 'unauthorized' });
+
+    return {
+      userId: user.id,
+      email: user.email,
+      rankPoints: user.rankPoints,
+      tier: tierForPoints(user.rankPoints),
+    };
+  });
 
   return app;
 }

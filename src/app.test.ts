@@ -215,3 +215,69 @@ describe('POST /auth/link and /auth/login', () => {
     expect(response.statusCode).toBe(401);
   });
 });
+
+interface MeResponseBody {
+  userId: string;
+  email: string | null;
+  rankPoints: number;
+  tier: string;
+}
+
+describe('GET /me', () => {
+  it('returns the guest profile with zero rank points and no email', async () => {
+    const app = await makeApp();
+    const guest = asGuestSession(await app.inject({ method: 'POST', url: '/auth/guest' }));
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/me',
+      headers: { authorization: `Bearer ${guest.tokens.accessToken}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<MeResponseBody>();
+    expect(body.userId).toBe(guest.userId);
+    expect(body.email).toBeNull();
+    expect(body.rankPoints).toBe(0);
+    expect(body.tier).toBe('Bronze');
+  });
+
+  it('reflects the linked email and derives the tier from rank points', async () => {
+    const app = await makeApp();
+    const guest = asGuestSession(await app.inject({ method: 'POST', url: '/auth/guest' }));
+    await app.inject({
+      method: 'POST',
+      url: '/auth/link',
+      headers: { authorization: `Bearer ${guest.tokens.accessToken}` },
+      payload: { email: 'me-endpoint@example.com', password: 'password123' },
+    });
+    await prisma.user.update({ where: { id: guest.userId }, data: { rankPoints: 1500 } });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/me',
+      headers: { authorization: `Bearer ${guest.tokens.accessToken}` },
+    });
+
+    const body = response.json<MeResponseBody>();
+    expect(body.email).toBe('me-endpoint@example.com');
+    expect(body.rankPoints).toBe(1500);
+    expect(body.tier).toBe('Gold');
+  });
+
+  it('rejects a request with no access token', async () => {
+    const app = await makeApp();
+    const response = await app.inject({ method: 'GET', url: '/me' });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('rejects a well-formed but invalid access token', async () => {
+    const app = await makeApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/me',
+      headers: { authorization: 'Bearer not-a-real-token' },
+    });
+    expect(response.statusCode).toBe(401);
+  });
+});

@@ -83,6 +83,7 @@ All bodies are JSON. Rate-limited per the table below (`429` once exceeded).
 | `POST /auth/refresh` | `{ refreshToken }` | no | 20/min | `{ accessToken, refreshToken }` - rotates both |
 | `POST /auth/link` | `{ email, password }` | `Authorization: Bearer <accessToken>` | 20/min | `{ ok: true, tokens: { accessToken, refreshToken } }` - upgrades the authenticated guest in place, or changes its password if already linked |
 | `POST /auth/login` | `{ email, password }` | no | 10/min | `{ accessToken, refreshToken }` |
+| `GET /me` | - | `Authorization: Bearer <accessToken>` | 100/min | `{ userId, email: string \| null, rankPoints, tier }` |
 
 `password` must be 8-72 characters. Linking an email already in use returns
 `409`; bad credentials return `401`.

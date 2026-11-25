@@ -7,13 +7,14 @@ time of this review (see [plans/archive/backend-build.md](plans/archive/backend-
 for the phase-by-phase build history and decision log).
 
 **Verification at time of writing**: `tsc --noEmit` clean, `eslint .` clean (0
-errors), `npm run build` succeeds, **205/205 tests passing** (re-run multiple
+errors), `npm run build` succeeds, **209/209 tests passing** (re-run multiple
 times for stability). Updated after follow-up hardening passes that turned
 five of the judgment calls below into fixes (JWT secret strength/collision,
 access/refresh token typing, chat message trimming, profanity word-boundary
 matching, token revocation/single-session enforcement), retrying and
-dead-lettering game-result writes on DB failure, and per-connection flood
-control on chat/report/join/quick-play (see section 1 for details).
+dead-lettering game-result writes on DB failure, per-connection flood
+control on chat/report/join/quick-play, and a new `GET /me` profile
+endpoint added for the Flutter frontend (see section 1 for details).
 
 ---
 
@@ -244,7 +245,8 @@ Everything that makes the game playable over a network:
 
 ### `src/app.ts` / `src/server.ts` — the HTTP side
 - A small REST API: health check, create a guest account, refresh a session,
-  link an account, log in.
+  link an account, log in, and fetch the signed-in player's own profile
+  (id, email if linked, rank points, derived tier).
 - Every one of those endpoints is rate-limited so it can't be spammed or
   brute-forced.
 - Starts and stops cleanly, including shutting down any in-flight game timers.
