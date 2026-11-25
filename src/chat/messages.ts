@@ -22,13 +22,15 @@ export function isQuickPhrase(text: string): text is QuickPhrase {
  * run through the profanity filter.
  */
 export function createChatMessage(seat: number, text: string, filter: ProfanityFilter): ChatMessage {
-  if (isQuickPhrase(text)) {
-    return { seat, text, sentAt: new Date().toISOString() };
+  const trimmed = text.trim();
+
+  if (isQuickPhrase(trimmed)) {
+    return { seat, text: trimmed, sentAt: new Date().toISOString() };
   }
 
-  if (text.length === 0) throw new ChatError('empty-message');
-  if (text.length > MAX_MESSAGE_LENGTH) throw new ChatError('message-too-long');
-  if (filter.containsProfanity(text)) throw new ChatError('profanity-blocked');
+  if (trimmed.length === 0) throw new ChatError('empty-message');
+  if (trimmed.length > MAX_MESSAGE_LENGTH) throw new ChatError('message-too-long');
+  if (filter.containsProfanity(trimmed)) throw new ChatError('profanity-blocked');
 
-  return { seat, text, sentAt: new Date().toISOString() };
+  return { seat, text: trimmed, sentAt: new Date().toISOString() };
 }

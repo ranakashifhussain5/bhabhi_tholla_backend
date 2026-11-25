@@ -23,8 +23,8 @@ describe('createGuestSession', () => {
     expect(user?.rankPoints).toBe(0);
     expect(user?.email).toBeNull();
 
-    expect(await verifyToken(session.tokens.accessToken, secrets.accessSecret)).toBe(session.userId);
-    expect(await verifyToken(session.tokens.refreshToken, secrets.refreshSecret)).toBe(session.userId);
+    expect(await verifyToken(session.tokens.accessToken, secrets.accessSecret, 'access')).toBe(session.userId);
+    expect(await verifyToken(session.tokens.refreshToken, secrets.refreshSecret, 'refresh')).toBe(session.userId);
   });
 
   it('creates a distinct user on each call', async () => {

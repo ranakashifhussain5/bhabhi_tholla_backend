@@ -104,7 +104,7 @@ async function requireUserId(request: FastifyRequest, jwtSecrets: JwtSecrets): P
   if (!header?.startsWith('Bearer ')) return null;
 
   try {
-    return await verifyToken(header.slice('Bearer '.length), jwtSecrets.accessSecret);
+    return await verifyToken(header.slice('Bearer '.length), jwtSecrets.accessSecret, 'access');
   } catch {
     return null;
   }

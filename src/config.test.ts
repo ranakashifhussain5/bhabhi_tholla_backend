@@ -3,8 +3,8 @@ import { loadConfig } from './config.js';
 
 const validEnv = {
   DATABASE_URL: 'postgresql://localhost/db',
-  JWT_ACCESS_SECRET: 'a'.repeat(16),
-  JWT_REFRESH_SECRET: 'b'.repeat(16),
+  JWT_ACCESS_SECRET: 'a'.repeat(32),
+  JWT_REFRESH_SECRET: 'b'.repeat(32),
 };
 
 describe('loadConfig', () => {
@@ -22,10 +22,16 @@ describe('loadConfig', () => {
     );
   });
 
-  it('rejects a JWT secret shorter than 16 characters', () => {
+  it('rejects a JWT secret shorter than 32 characters', () => {
     expect(() => loadConfig({ ...validEnv, JWT_ACCESS_SECRET: 'short' })).toThrow(
       /JWT_ACCESS_SECRET/,
     );
+  });
+
+  it('rejects identical JWT access and refresh secrets', () => {
+    expect(() =>
+      loadConfig({ ...validEnv, JWT_ACCESS_SECRET: 'a'.repeat(32), JWT_REFRESH_SECRET: 'a'.repeat(32) }),
+    ).toThrow(/must not be the same value/);
   });
 
   it('coerces PORT from a string', () => {

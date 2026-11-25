@@ -32,6 +32,15 @@ describe('createChatMessage', () => {
     expect(() => createChatMessage(0, '', filter)).toThrow(ChatError);
   });
 
+  it('rejects a message that is only whitespace', () => {
+    expect(() => createChatMessage(0, '   \n\t  ', filter)).toThrow(/empty-message/);
+  });
+
+  it('trims leading and trailing whitespace from an ordinary message', () => {
+    const message = createChatMessage(0, '  nice move  ', filter);
+    expect(message.text).toBe('nice move');
+  });
+
   it('rejects a message over the length limit', () => {
     expect(() => createChatMessage(0, 'a'.repeat(MAX_MESSAGE_LENGTH + 1), filter)).toThrow(/message-too-long/);
   });

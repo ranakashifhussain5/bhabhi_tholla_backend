@@ -39,8 +39,8 @@ whether Postgres is Dockerized or native.
 | `NODE_ENV` | `development` \| `test` \| `production` |
 | `PORT` | HTTP port (default 3000) |
 | `DATABASE_URL` | Postgres connection string |
-| `JWT_ACCESS_SECRET` | Signs short-lived (15m) access tokens - 16+ chars |
-| `JWT_REFRESH_SECRET` | Signs long-lived (30d) refresh tokens - 16+ chars |
+| `JWT_ACCESS_SECRET` | Signs short-lived (15m) access tokens - 32+ chars, must differ from `JWT_REFRESH_SECRET` |
+| `JWT_REFRESH_SECRET` | Signs long-lived (30d) refresh tokens - 32+ chars, must differ from `JWT_ACCESS_SECRET` |
 
 ## npm scripts
 

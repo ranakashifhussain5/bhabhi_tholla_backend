@@ -56,9 +56,13 @@ function normalize(text: string): string {
 /**
  * Word-boundary matching on the normalized text is the primary (low false
  * positive) check; a collapsed (spaces removed) substring check catches
- * spaced-out evasion like "f u c k" at the cost of occasional false
- * positives on short words - an accepted trade-off for a starter filter.
+ * spaced-out evasion like "f u c k". Words at or under SHORT_WORD_THRESHOLD
+ * (e.g. "mc", "bc") skip the collapsed check entirely - at that length a
+ * substring match is far more likely to be a false positive (e.g.
+ * "mcdonalds") than real evasion, so only a whole-token match counts.
  */
+const SHORT_WORD_THRESHOLD = 3;
+
 export function createWordlistProfanityFilter(words: readonly string[]): ProfanityFilter {
   const normalizedWords = words.map((w) => normalize(w)).filter((w) => w.length > 0);
 
@@ -67,7 +71,11 @@ export function createWordlistProfanityFilter(words: readonly string[]): Profani
       const normalized = normalize(text);
       const tokens = normalized.split(/\s+/).filter(Boolean);
       const collapsed = tokens.join('');
-      return normalizedWords.some((word) => tokens.includes(word) || collapsed.includes(word));
+      return normalizedWords.some((word) => {
+        if (tokens.includes(word)) return true;
+        if (word.length <= SHORT_WORD_THRESHOLD) return false;
+        return collapsed.includes(word);
+      });
     },
   };
 }

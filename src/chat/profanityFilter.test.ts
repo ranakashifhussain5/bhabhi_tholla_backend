@@ -38,4 +38,12 @@ describe('defaultProfanityFilter', () => {
   it('allows an ordinary friendly message', () => {
     expect(defaultProfanityFilter.containsProfanity('well played, good game!')).toBe(false);
   });
+
+  it('does not flag a short word as a substring inside an innocent word', () => {
+    expect(defaultProfanityFilter.containsProfanity('lets go to mcdonalds')).toBe(false);
+  });
+
+  it('still catches a short word when it appears as its own token', () => {
+    expect(defaultProfanityFilter.containsProfanity('tu mc hai')).toBe(true);
+  });
 });

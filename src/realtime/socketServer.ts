@@ -115,7 +115,7 @@ export function attachSocketServer(
       try {
         const token = socket.handshake.auth.token as unknown;
         if (typeof token !== 'string') throw new Error('missing-token');
-        const playerId = await verifyToken(token, jwtSecrets.accessSecret);
+        const playerId = await verifyToken(token, jwtSecrets.accessSecret, 'access');
         socket.data.playerId = playerId;
         socket.data.mutedUserIds = await getMutedUserIds(prisma, playerId);
         next();
