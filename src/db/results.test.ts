@@ -1,7 +1,11 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GameState } from '../engine/index.js';
 import type { Room, SeatBinding } from '../realtime/index.js';
 import { prisma } from './client.js';
+import { readDeadLetters } from './deadLetter.js';
 import { persistGameResult } from './results.js';
 import { resetDb } from './testHelpers.js';
 
@@ -181,5 +185,67 @@ describe('persistGameResult', () => {
     const game = await prisma.game.findFirst({ where: { mode: 'private' } });
     const report = await prisma.report.findFirst({ where: { roomId: room.roomId } });
     expect(report?.gameId).toBe(game?.id);
+  });
+
+  it('retries a transient DB failure (with backoff) and still saves the result', async () => {
+    const users = await Promise.all(Array.from({ length: 2 }, () => prisma.user.create({ data: {} })));
+    const userIds = users.map((u) => u.id);
+    const room = makeFinishedRoom({
+      affectsRank: true,
+      userIds,
+      finishOrder: [
+        { seat: 0, position: 1 },
+        { seat: 1, position: 2 },
+      ],
+    });
+
+    const transactionSpy = vi.spyOn(prisma, '$transaction');
+    transactionSpy.mockRejectedValueOnce(new Error('connection reset'));
+    transactionSpy.mockRejectedValueOnce(new Error('connection reset'));
+
+    try {
+      await persistGameResult(prisma, room, { retryDelayMs: 0 });
+
+      expect(transactionSpy).toHaveBeenCalledTimes(3);
+      expect(await prisma.game.count()).toBe(1);
+    } finally {
+      transactionSpy.mockRestore();
+    }
+  });
+
+  it('logs a dead letter and preserves the result data when every retry is exhausted', async () => {
+    const users = await Promise.all(Array.from({ length: 3 }, () => prisma.user.create({ data: {} })));
+    const userIds = users.map((u) => u.id);
+    const finishOrder = [
+      { seat: 0, position: 1 },
+      { seat: 1, position: 2 },
+      { seat: 2, position: 3 },
+    ];
+    const room = makeFinishedRoom({ affectsRank: true, userIds, finishOrder });
+
+    const transactionSpy = vi.spyOn(prisma, '$transaction').mockRejectedValue(new Error('connection refused'));
+    const deadLetterDir = await mkdtemp(join(tmpdir(), 'bhabhi-dead-letter-'));
+    const deadLetterPath = join(deadLetterDir, 'game-results.jsonl');
+
+    try {
+      await expect(persistGameResult(prisma, room, { retryDelayMs: 0, deadLetterPath })).rejects.toThrow(
+        'connection refused',
+      );
+
+      // Exactly the default 3 attempts, and nothing landed in the database -
+      // the point of the dead letter is that the result survives anyway.
+      expect(transactionSpy).toHaveBeenCalledTimes(3);
+      expect(await prisma.game.count()).toBe(0);
+
+      const entries = await readDeadLetters(deadLetterPath);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.error).toBe('connection refused');
+      expect(entries[0]?.snapshot.roomId).toBe(room.roomId);
+      expect(entries[0]?.snapshot.finishOrder).toEqual(finishOrder);
+      expect(entries[0]?.snapshot.seats.map((s) => s.playerId)).toEqual(userIds);
+    } finally {
+      transactionSpy.mockRestore();
+      await rm(deadLetterDir, { recursive: true, force: true });
+    }
   });
 });
