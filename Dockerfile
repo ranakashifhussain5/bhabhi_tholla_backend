@@ -16,6 +16,9 @@ ENV DATABASE_URL="postgresql://build:build@localhost:5432/build"
 RUN npx prisma generate
 RUN npm run build
 
+FROM build AS migrate
+CMD ["npx", "prisma", "migrate", "deploy"]
+
 FROM node:24-alpine AS prod-deps
 WORKDIR /app
 COPY package.json package-lock.json ./

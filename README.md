@@ -66,15 +66,11 @@ and `JWT_REFRESH_SECRET` from the host environment (falls back to insecure
 dev-only defaults if unset - override these for anything beyond local
 testing).
 
-Migrations are **not** run automatically on container start (avoids
-multiple instances racing to migrate) and the runtime image deliberately
-doesn't bundle the `prisma` CLI or the `prisma/` folder (keeps it lean - see
-the Dockerfile). Run migrations from the host instead, against the same
-database the `postgres` service exposes on `5432`:
-
-```bash
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/bhabhi_tholla npx prisma migrate deploy
-```
+A one-shot `migrate` service runs `prisma migrate deploy` against `postgres`
+and exits; `app` won't start until it completes successfully. The long-running
+`app` image still deliberately doesn't bundle the `prisma` CLI or the
+`prisma/` folder (keeps it lean - see the Dockerfile); only the separate
+`migrate` build target has them.
 
 ## REST API
 
