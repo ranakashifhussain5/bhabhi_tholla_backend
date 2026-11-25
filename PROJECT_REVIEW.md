@@ -7,11 +7,12 @@ time of this review (see [plans/archive/backend-build.md](plans/archive/backend-
 for the phase-by-phase build history and decision log).
 
 **Verification at time of writing**: `tsc --noEmit` clean, `eslint .` clean (0
-errors), `npm run build` succeeds, **177/177 tests passing** (re-run multiple
-times for stability). Updated after a follow-up hardening pass that turned
-four of the judgment calls below into fixes (JWT secret strength/collision,
+errors), `npm run build` succeeds, **194/194 tests passing** (re-run multiple
+times for stability). Updated after follow-up hardening passes that turned
+five of the judgment calls below into fixes (JWT secret strength/collision,
 access/refresh token typing, chat message trimming, profanity word-boundary
-matching) - see section 1 for details.
+matching, token revocation/single-session enforcement), plus retrying and
+dead-lettering game-result writes on DB failure (see section 1 for details).
 
 ---
 
@@ -91,6 +92,31 @@ no longer gets flagged). Longer words still also match the collapsed
 (spaces-removed) form, to keep catching spaced-out evasion like "f u c k".
 Covered by new tests.
 
+### `src/db/results.ts` — a failed game-result write is retried, then dead-lettered instead of lost
+`persistGameResult` now retries a failed transaction up to 3 times with
+exponential backoff before giving up. If every attempt still fails, the full
+result snapshot is appended to a local dead-letter file (`src/db/deadLetter.ts`)
+instead of being lost, and the error is still rethrown so the existing
+caller-side logging fires. Covered by tests simulating both a transient
+failure (retries then succeeds) and a total outage (dead-letters the
+snapshot, nothing lands in the DB).
+
+### Auth: token revocation and single-session enforcement
+Added a `tokenVersion` column on `User`, embedded in every refresh token at
+issuance. `/auth/link` bumps it whenever it sets or changes the password, so
+every refresh token issued before that point stops working on its next
+`/auth/refresh` call, even though its signature and expiry are both still
+valid - the device making the change gets a fresh pair in the same response
+so it isn't logged out by its own action. Access tokens are unaffected
+(short-lived enough that the exposure window is bounded without a database
+check on every request). Separately, a socket layer now allows only one
+active connection per account - connecting a second time sends the first a
+`session:kicked` event and disconnects it (this replaces the "reclaiming a
+seat from a second device" judgment call below, which used to let the new
+connection quietly take over). Covered by new tests at every layer (JWT
+claim extraction, the DB version check, the REST round trip, and the socket
+kick).
+
 ---
 
 ## 2. Reviewed and deliberately left alone
@@ -98,12 +124,6 @@ Covered by new tests.
 These were noticed but are judgment calls, not bugs — recorded here rather
 than silently fixed, in case any of them matter for a future decision:
 
-- **Reclaiming a seat from a second device.** If the same account connects a
-  second time while already connected elsewhere, the newer connection quietly
-  takes over the seat. This is self-inflicted confusion (same verified
-  identity), GAME_RULES.md doesn't address multi-device play, and there are
-  several reasonable policies — picking one is a product decision, not an
-  obvious bug fix.
 - **Docker / docker-compose.** Re-checked exhaustively: every environment
   variable name matches exactly across the Dockerfile, `docker-compose.yml`,
   `src/config.ts`, and `.env.example`; the build-stage placeholder database

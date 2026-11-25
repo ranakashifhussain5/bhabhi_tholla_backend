@@ -106,6 +106,8 @@ export function attachSocketServer(
   const timers = new TurnTimerManager(
     options.turnTimeoutMs === undefined ? {} : { timeoutMs: options.turnTimeoutMs },
   );
+  /** One active connection per account at a time - a new one kicks the previous socket off (section: single-session enforcement). */
+  const activeConnections = new Map<string, string>();
   const { prisma, jwtSecrets } = options;
   const profanityFilter = options.profanityFilter ?? defaultProfanityFilter;
   const logger = options.logger ?? consoleLogger;
@@ -199,6 +201,15 @@ export function attachSocketServer(
   }
 
   io.on('connection', (socket: AppSocket) => {
+    const playerId = socket.data.playerId;
+    const previousSocketId = activeConnections.get(playerId);
+    if (previousSocketId && previousSocketId !== socket.id) {
+      const previousSocket = io.sockets.sockets.get(previousSocketId);
+      previousSocket?.emit('session:kicked', { reason: 'signed-in-elsewhere' });
+      previousSocket?.disconnect(true);
+    }
+    activeConnections.set(playerId, socket.id);
+
     socket.on('quickplay:join', () => {
       matchmaker.join(socket.data.playerId, socket.id);
     });
@@ -309,6 +320,13 @@ export function attachSocketServer(
     });
 
     socket.on('disconnect', () => {
+      // Only clear the map if this socket is still the registered one for
+      // the player - a kicked (stale) socket's own disconnect must not
+      // clobber the newer connection that just replaced it.
+      if (activeConnections.get(playerId) === socket.id) {
+        activeConnections.delete(playerId);
+      }
+
       const room = currentRoom(socket);
       if (!room) return;
       const binding = handleDisconnect(room, timers, socket.id, notify);

@@ -15,13 +15,21 @@ function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-/** Upgrades an existing (guest) user in place with an email/password - no new row, no lost history. */
+/**
+ * Upgrades an existing (guest) user in place with an email/password - no new
+ * row, no lost history. Setting/changing a password bumps tokenVersion,
+ * which immediately invalidates every refresh token issued before this call
+ * (any other signed-in device has to log in again) - the fresh pair returned
+ * here is this device's replacement so it isn't logged out by its own
+ * action.
+ */
 export async function linkEmailPassword(
   prisma: PrismaClient,
+  secrets: JwtSecrets,
   userId: string,
   email: string,
   password: string,
-): Promise<void> {
+): Promise<TokenPair> {
   const normalizedEmail = normalizeEmail(email);
   const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
   if (existing && existing.id !== userId) {
@@ -30,7 +38,11 @@ export async function linkEmailPassword(
 
   const passwordHash = await hashPassword(password);
   try {
-    await prisma.user.update({ where: { id: userId }, data: { email: normalizedEmail, passwordHash } });
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: { email: normalizedEmail, passwordHash, tokenVersion: { increment: 1 } },
+    });
+    return issueTokenPair(userId, secrets, updated.tokenVersion);
   } catch (err) {
     // The findUnique check above can't see a concurrent link racing it to
     // the same email; the DB's unique constraint is the real guard, so
@@ -54,5 +66,5 @@ export async function loginWithEmailPassword(
     throw new AuthError('invalid-credentials');
   }
 
-  return issueTokenPair(user.id, secrets);
+  return issueTokenPair(user.id, secrets, user.tokenVersion);
 }

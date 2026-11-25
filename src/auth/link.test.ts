@@ -19,7 +19,7 @@ describe('linkEmailPassword', () => {
     const guest = await createGuestSession(prisma, secrets);
     await prisma.user.update({ where: { id: guest.userId }, data: { rankPoints: 120 } });
 
-    await linkEmailPassword(prisma, guest.userId, 'player@example.com', 'hunter2hunter2');
+    await linkEmailPassword(prisma, secrets, guest.userId, 'player@example.com', 'hunter2hunter2');
 
     const user = await prisma.user.findUnique({ where: { id: guest.userId } });
     expect(user?.id).toBe(guest.userId);
@@ -31,17 +31,17 @@ describe('linkEmailPassword', () => {
   it('refuses to link an email already used by a different account', async () => {
     const first = await createGuestSession(prisma, secrets);
     const second = await createGuestSession(prisma, secrets);
-    await linkEmailPassword(prisma, first.userId, 'taken@example.com', 'password123');
+    await linkEmailPassword(prisma, secrets, first.userId, 'taken@example.com', 'password123');
 
-    await expect(linkEmailPassword(prisma, second.userId, 'taken@example.com', 'other-pass')).rejects.toThrow(
+    await expect(linkEmailPassword(prisma, secrets, second.userId, 'taken@example.com', 'other-pass')).rejects.toThrow(
       AuthError,
     );
   });
 
   it('is idempotent for re-linking the same email to the same account', async () => {
     const guest = await createGuestSession(prisma, secrets);
-    await linkEmailPassword(prisma, guest.userId, 'same@example.com', 'password123');
-    await expect(linkEmailPassword(prisma, guest.userId, 'same@example.com', 'new-password')).resolves.not.toThrow();
+    await linkEmailPassword(prisma, secrets, guest.userId, 'same@example.com', 'password123');
+    await expect(linkEmailPassword(prisma, secrets, guest.userId, 'same@example.com', 'new-password')).resolves.not.toThrow();
   });
 
   it('cleanly rejects a concurrent race to link the same email to two different accounts', async () => {
@@ -52,8 +52,8 @@ describe('linkEmailPassword', () => {
     // commits - the DB's unique constraint, not the check, is what must
     // stop the loser, and it must surface as the same clean AuthError.
     const results = await Promise.allSettled([
-      linkEmailPassword(prisma, first.userId, 'race@example.com', 'password123'),
-      linkEmailPassword(prisma, second.userId, 'race@example.com', 'password123'),
+      linkEmailPassword(prisma, secrets, first.userId, 'race@example.com', 'password123'),
+      linkEmailPassword(prisma, secrets, second.userId, 'race@example.com', 'password123'),
     ]);
 
     const rejected = results.filter((r) => r.status === 'rejected');
@@ -64,21 +64,42 @@ describe('linkEmailPassword', () => {
   it('normalizes email case, so differently-cased emails cannot collide or diverge', async () => {
     const first = await createGuestSession(prisma, secrets);
     const second = await createGuestSession(prisma, secrets);
-    await linkEmailPassword(prisma, first.userId, 'Mixed@Example.com', 'password123');
+    await linkEmailPassword(prisma, secrets, first.userId, 'Mixed@Example.com', 'password123');
 
     const user = await prisma.user.findUnique({ where: { id: first.userId } });
     expect(user?.email).toBe('mixed@example.com');
 
-    await expect(linkEmailPassword(prisma, second.userId, 'mixed@example.com', 'other-pass')).rejects.toThrow(
+    await expect(linkEmailPassword(prisma, secrets, second.userId, 'mixed@example.com', 'other-pass')).rejects.toThrow(
       AuthError,
     );
+  });
+
+  it('returns a fresh, working token pair for the caller', async () => {
+    const guest = await createGuestSession(prisma, secrets);
+    const tokens = await linkEmailPassword(prisma, secrets, guest.userId, 'fresh@example.com', 'password123');
+    expect(tokens.accessToken).toBeTruthy();
+    expect(tokens.refreshToken).toBeTruthy();
+  });
+
+  it('bumps tokenVersion every time the password is set, invalidating any token issued before it', async () => {
+    const guest = await createGuestSession(prisma, secrets);
+    const before = await prisma.user.findUnique({ where: { id: guest.userId } });
+    expect(before?.tokenVersion).toBe(0);
+
+    await linkEmailPassword(prisma, secrets, guest.userId, 'versioned@example.com', 'password123');
+    const afterFirstLink = await prisma.user.findUnique({ where: { id: guest.userId } });
+    expect(afterFirstLink?.tokenVersion).toBe(1);
+
+    await linkEmailPassword(prisma, secrets, guest.userId, 'versioned@example.com', 'new-password');
+    const afterPasswordChange = await prisma.user.findUnique({ where: { id: guest.userId } });
+    expect(afterPasswordChange?.tokenVersion).toBe(2);
   });
 });
 
 describe('loginWithEmailPassword', () => {
   it('issues tokens for the correct email/password', async () => {
     const guest = await createGuestSession(prisma, secrets);
-    await linkEmailPassword(prisma, guest.userId, 'login@example.com', 'correct-password');
+    await linkEmailPassword(prisma, secrets, guest.userId, 'login@example.com', 'correct-password');
 
     const tokens = await loginWithEmailPassword(prisma, secrets, 'login@example.com', 'correct-password');
     expect(tokens.accessToken).toBeTruthy();
@@ -86,7 +107,7 @@ describe('loginWithEmailPassword', () => {
 
   it('rejects an incorrect password', async () => {
     const guest = await createGuestSession(prisma, secrets);
-    await linkEmailPassword(prisma, guest.userId, 'login2@example.com', 'correct-password');
+    await linkEmailPassword(prisma, secrets, guest.userId, 'login2@example.com', 'correct-password');
 
     await expect(loginWithEmailPassword(prisma, secrets, 'login2@example.com', 'wrong')).rejects.toThrow(AuthError);
   });
@@ -99,7 +120,7 @@ describe('loginWithEmailPassword', () => {
 
   it('logs in with a differently-cased email than was used to link', async () => {
     const guest = await createGuestSession(prisma, secrets);
-    await linkEmailPassword(prisma, guest.userId, 'CaseTest@Example.com', 'correct-password');
+    await linkEmailPassword(prisma, secrets, guest.userId, 'CaseTest@Example.com', 'correct-password');
 
     const tokens = await loginWithEmailPassword(prisma, secrets, 'casetest@example.com', 'correct-password');
     expect(tokens.accessToken).toBeTruthy();

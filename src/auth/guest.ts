@@ -13,6 +13,6 @@ export async function createGuestSession(
   secrets: JwtSecrets,
 ): Promise<GuestSession> {
   const user = await prisma.user.create({ data: {} });
-  const tokens = await issueTokenPair(user.id, secrets);
+  const tokens = await issueTokenPair(user.id, secrets, user.tokenVersion);
   return { userId: user.id, tokens };
 }

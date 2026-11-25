@@ -14,6 +14,11 @@ interface GuestSessionBody {
   tokens: TokenPair;
 }
 
+interface LinkResponseBody {
+  ok: boolean;
+  tokens: TokenPair;
+}
+
 const jwtSecrets = { accessSecret: 'a'.repeat(32), refreshSecret: 'b'.repeat(32) };
 
 function makeApp() {
@@ -101,6 +106,26 @@ describe('POST /auth/refresh', () => {
     });
     expect(response.statusCode).toBe(401);
   });
+
+  it('rejects a refresh token issued before a password change', async () => {
+    const app = await makeApp();
+    const guest = asGuestSession(await app.inject({ method: 'POST', url: '/auth/guest' }));
+    const staleRefreshToken = guest.tokens.refreshToken;
+
+    await app.inject({
+      method: 'POST',
+      url: '/auth/link',
+      headers: { authorization: `Bearer ${guest.tokens.accessToken}` },
+      payload: { email: 'stale-token@example.com', password: 'password123' },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/refresh',
+      payload: { refreshToken: staleRefreshToken },
+    });
+    expect(response.statusCode).toBe(401);
+  });
 });
 
 describe('POST /auth/link and /auth/login', () => {
@@ -115,6 +140,9 @@ describe('POST /auth/link and /auth/login', () => {
       payload: { email: 'player@example.com', password: 'password123' },
     });
     expect(linkResponse.statusCode).toBe(200);
+    const linkBody = linkResponse.json<LinkResponseBody>();
+    expect(linkBody.tokens.accessToken).toBeTruthy();
+    expect(linkBody.tokens.refreshToken).toBeTruthy();
 
     const loginResponse = await app.inject({
       method: 'POST',

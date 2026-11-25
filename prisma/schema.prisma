@@ -12,6 +12,8 @@ model User {
   email        String?  @unique
   passwordHash String?
   rankPoints   Int      @default(0)
+  /** Bumped whenever every other session should be logged out (e.g. a password change) - a refresh token embeds the version it was issued under, and is rejected once this no longer matches. */
+  tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

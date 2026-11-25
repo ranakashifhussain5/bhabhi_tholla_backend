@@ -348,4 +348,36 @@ describe('socketServer integration (real socket.io-client)', () => {
       pool.closeAll();
     }
   });
+
+  it('kicks the previous connection with session:kicked when the same account connects a second time', async () => {
+    const pool = new SocketPool();
+    try {
+      const guest = await createGuestSession(prisma, jwtSecrets);
+      const firstSocket = pool.connect(server.baseUrl, guest.tokens.accessToken);
+      await new Promise<void>((resolve) => firstSocket.on('connect', resolve));
+
+      const kicked = new Promise<{ reason: string }>((resolve) => {
+        firstSocket.once('session:kicked', resolve);
+      });
+      const firstDisconnected = new Promise<void>((resolve) => {
+        firstSocket.once('disconnect', () => resolve());
+      });
+
+      const secondSocket = pool.connect(server.baseUrl, guest.tokens.accessToken);
+      await new Promise<void>((resolve) => secondSocket.on('connect', resolve));
+
+      expect((await kicked).reason).toBe('signed-in-elsewhere');
+      await firstDisconnected;
+      expect(firstSocket.connected).toBe(false);
+
+      // The new connection stays fully usable.
+      const ack = await new Promise<AckResponse>((resolve) => {
+        secondSocket.emit('reclaim', { roomId: 'no-such-room' }, resolve);
+      });
+      expect(ack.ok).toBe(false);
+      expect(secondSocket.connected).toBe(true);
+    } finally {
+      pool.closeAll();
+    }
+  });
 });

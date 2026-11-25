@@ -6,7 +6,7 @@ import {
   createGuestSession,
   linkEmailPassword,
   loginWithEmailPassword,
-  refreshTokenPair,
+  refreshSession,
   verifyToken,
 } from './auth/index.js';
 import type { JwtSecrets } from './auth/index.js';
@@ -53,7 +53,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       if (!body.success) return reply.code(400).send({ error: 'invalid-request' });
 
       try {
-        return await refreshTokenPair(body.data.refreshToken, jwtSecrets);
+        return await refreshSession(prisma, body.data.refreshToken, jwtSecrets);
       } catch {
         return reply.code(401).send({ error: 'invalid-refresh-token' });
       }
@@ -71,8 +71,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       if (!body.success) return reply.code(400).send({ error: 'invalid-request' });
 
       try {
-        await linkEmailPassword(prisma, userId, body.data.email, body.data.password);
-        return { ok: true };
+        const tokens = await linkEmailPassword(prisma, jwtSecrets, userId, body.data.email, body.data.password);
+        return { ok: true, tokens };
       } catch (err) {
         if (err instanceof AuthError) return reply.code(409).send({ error: err.reason });
         throw err;

@@ -81,11 +81,27 @@ All bodies are JSON. Rate-limited per the table below (`429` once exceeded).
 | `GET /health` | - | no | 100/min | `{ status: "ok" }` |
 | `POST /auth/guest` | - | no | 10/min | `{ userId, tokens: { accessToken, refreshToken } }` - new guest identity, no signup needed |
 | `POST /auth/refresh` | `{ refreshToken }` | no | 20/min | `{ accessToken, refreshToken }` - rotates both |
-| `POST /auth/link` | `{ email, password }` | `Authorization: Bearer <accessToken>` | 20/min | `{ ok: true }` - upgrades the authenticated guest in place |
+| `POST /auth/link` | `{ email, password }` | `Authorization: Bearer <accessToken>` | 20/min | `{ ok: true, tokens: { accessToken, refreshToken } }` - upgrades the authenticated guest in place, or changes its password if already linked |
 | `POST /auth/login` | `{ email, password }` | no | 10/min | `{ accessToken, refreshToken }` |
 
 `password` must be 8-72 characters. Linking an email already in use returns
 `409`; bad credentials return `401`.
+
+### Sessions and token revocation
+
+Every user has a `tokenVersion`, embedded in each refresh token issued to
+them. `/auth/link` bumps it every time it sets or changes the password, which
+immediately invalidates every refresh token issued before that call -
+`/auth/refresh` checks the embedded version against the database and returns
+`401` on a mismatch, even if the token's signature and expiry are still
+valid. `/auth/link`'s own response carries a fresh pair under the new
+version, so the device that just changed the password isn't logged out by
+its own action. Access tokens don't carry or check this version - they're
+short-lived (15m) enough that the exposure window is bounded without a
+database lookup on every request.
+
+Only one socket connection is allowed per account at a time: connecting a
+second one disconnects the first (see `session:kicked` below).
 
 ## Socket.IO contract
 
@@ -123,6 +139,7 @@ responds with at least `{ ok: boolean, error?: string }`.
 | `room:state` | The player's view: own hand, everyone's card counts, round/turn state, `legalMoves` (only on your turn), `finishOrder`, `gameOver` - **never contains another player's hand** |
 | `privateroom:lobby` | `{ pendingPlayerIds }` - broadcast to a private room's lobby as players join |
 | `chat:message` | `{ seat, text, sentAt }` - never sent to a socket that has muted the sender |
+| `session:kicked` | `{ reason: "signed-in-elsewhere" }` - sent to a connection right before the server disconnects it because the same account connected again elsewhere |
 
 ### Quick phrases
 
