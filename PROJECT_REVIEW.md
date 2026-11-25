@@ -268,10 +268,12 @@ correctly enforced by the database itself.
 Nothing here is a bug — these are either explicitly out of scope per the
 original plan, or open questions the game rules themselves never answered:
 
-- Actually running `docker compose up` once Docker is available on a machine
-  that has it.
-- Revoking a stolen token before it naturally expires (tokens are stateless
-  by design; there's no server-side "log everyone out" switch yet).
+- Actually running `docker compose up` end to end, and the container-restart /
+  DB-down crash test, once Docker is available on a machine that has it (this
+  machine has neither Docker nor WSL2, and this session can't self-elevate to
+  install either) - the compose file and Dockerfile are ready (healthcheck,
+  `depends_on: condition: service_healthy`, the `migrate` service), only the
+  live run itself is unverified.
 - A couple of small open questions GAME_RULES.md itself left unanswered
   (whether a bot-filled quick-play game should count for full rank points,
   whether a private room host should be able to add bots) — reasonable
