@@ -7,8 +7,11 @@ time of this review (see [plans/archive/backend-build.md](plans/archive/backend-
 for the phase-by-phase build history and decision log).
 
 **Verification at time of writing**: `tsc --noEmit` clean, `eslint .` clean (0
-errors), `npm run build` succeeds, **170/170 tests passing** (re-run multiple
-times for stability).
+errors), `npm run build` succeeds, **177/177 tests passing** (re-run multiple
+times for stability). Updated after a follow-up hardening pass that turned
+four of the judgment calls below into fixes (JWT secret strength/collision,
+access/refresh token typing, chat message trimming, profanity word-boundary
+matching) - see section 1 for details.
 
 ---
 
@@ -63,6 +66,31 @@ message. Fixed to match every sibling handler's pattern.
 Pointed at the build plan's old location (`plans/pending/`). The plan was
 archived once all phases finished and now lives at `plans/archive/`. Fixed.
 
+### `src/config.ts` — weak/colliding JWT secrets no longer boot
+Raised the minimum secret length from 16 to 32 characters and added a check
+that rejects `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` being set to the
+same value - the app now fails to boot instead of silently letting a refresh
+token also pass as an access token. Covered by new tests.
+
+### `src/auth/jwt.ts` — access and refresh tokens are no longer interchangeable
+Added a `typ` claim (`"access"` or `"refresh"`) to every signed token, and
+`verifyToken` now takes the expected type and rejects a mismatch. Previously,
+anyone holding both secrets (or exploiting the identical-secret case above)
+could use a refresh token wherever an access token was expected, or vice
+versa. Covered by new tests.
+
+### `src/chat/messages.ts` — pure-whitespace messages now rejected
+Chat text is trimmed before any validation, so a message that is only
+whitespace is now rejected as empty instead of passing through. Covered by a
+new test.
+
+### `src/chat/profanityFilter.ts` — short words no longer match as substrings
+Words at or under 3 characters (e.g. "mc", "bc") now only match as a whole
+token, never as a substring inside a longer innocent word (e.g. "mcdonalds"
+no longer gets flagged). Longer words still also match the collapsed
+(spaces-removed) form, to keep catching spaced-out evasion like "f u c k".
+Covered by new tests.
+
 ---
 
 ## 2. Reviewed and deliberately left alone
@@ -76,15 +104,6 @@ than silently fixed, in case any of them matter for a future decision:
   identity), GAME_RULES.md doesn't address multi-device play, and there are
   several reasonable policies — picking one is a product decision, not an
   obvious bug fix.
-- **`JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` set to the same value.** Nothing
-  stops an operator from accidentally setting both secrets identically, which
-  would let a refresh token also pass as an access token. This is a
-  deployment/ops concern, not a code-correctness one.
-- **Pure-whitespace chat messages** pass the length/profanity checks
-  untrimmed. Cosmetic at most; GAME_RULES.md doesn't address it.
-- **The profanity filter's short-word collapsed check** (e.g. "mc" would also
-  flag "mcdonalds") is an explicitly documented, deliberate trade-off already
-  called out in that file's own comments.
 - **Docker / docker-compose.** Re-checked exhaustively: every environment
   variable name matches exactly across the Dockerfile, `docker-compose.yml`,
   `src/config.ts`, and `.env.example`; the build-stage placeholder database
